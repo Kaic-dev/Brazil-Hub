@@ -6,11 +6,11 @@ local Players = game:GetService("Players")
 
 -- Configuration constants
 local CONFIG = {
-    LEADERBOARD_SIZE = UDim2.new(0.05, 150, 0, 240),
-    SCROLLING_FRAME_SIZE = UDim2.new(1.05, -10, 1, -20),
-    PLAYER_FRAME_SIZE = UDim2.new(1, 0, 0.1, 0),
-    PRESTIGE_BUTTON_SIZE = UDim2.new(0, 35, 0, 20),
-    PLAYER_LABEL_SIZE = UDim2.new(1.5, 0, 0, 20),
+    LEADERBOARD_SIZE = UDim2.new(0, 180, 0, 250), -- Tamanho fixo em pixels para consistência
+    SCROLLING_FRAME_SIZE = UDim2.new(1, -16, 1, -16), -- Ajustado para caber perfeitamente dentro do container
+    PLAYER_FRAME_SIZE = UDim2.new(1, 0, 0, 26), -- Altura fixa de 26px para evitar distorção
+    PRESTIGE_BUTTON_SIZE = UDim2.new(0, 30, 0, 18),
+    PLAYER_LABEL_SIZE = UDim2.new(1, -35, 0, 20), -- Limita a largura para evitar vazamento horizontal
     RETRY_INTERVAL = 1,
     PLAYERGUI_TIMEOUT = 5,
     
@@ -90,22 +90,25 @@ function BetterLeaderboard:_createScrollingFrame(parent)
     scrollingFrame.Name = "ScrollingFrame"
     scrollingFrame.ScrollBarImageColor3 = CONFIG.COLORS.GREEN
     scrollingFrame.MidImage = CONFIG.ASSETS.SCROLL_MID
+    scrollingFrame.Active = true
+    scrollingFrame.ScrollBarThickness = 6 -- Barra mais fina e elegante
     scrollingFrame.TopImage = CONFIG.ASSETS.SCROLL_TOP
     scrollingFrame.BottomImage = CONFIG.ASSETS.SCROLL_BOTTOM
-    scrollingFrame.Active = true
-    scrollingFrame.ScrollBarThickness = 10
+    scrollingFrame.VerticalScrollBarPosition = Enum.VerticalScrollBarPosition.Right
+    scrollingFrame.Visible = true
     scrollingFrame.BackgroundTransparency = 1
     scrollingFrame.BackgroundColor3 = CONFIG.COLORS.WHITE
     scrollingFrame.VerticalScrollBarInset = Enum.ScrollBarInset.ScrollBar
-    scrollingFrame.Position = UDim2.new(-0.07, 0, 0.04, 0)
+    scrollingFrame.Position = UDim2.new(0, 8, 0, 8) -- Alinhado perfeitamente com margem de 8px
     scrollingFrame.ScrollingDirection = Enum.ScrollingDirection.Y
     scrollingFrame.Size = CONFIG.SCROLLING_FRAME_SIZE
     scrollingFrame.BorderSizePixel = 0
-    scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 330)
+    scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, 220)
     
     -- Add list layout for automatic ordering
     local listLayout = Instance.new("UIListLayout")
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.Padding = UDim.new(0, 4) -- Espaçamento sutil de 4px entre cada linha
     listLayout.Parent = scrollingFrame
     
     scrollingFrame.Parent = parent
@@ -439,7 +442,7 @@ function BetterLeaderboard:addPlayerFrame(player)
     local playerFrame = Instance.new("Frame")
     playerFrame.BackgroundTransparency = 1
     playerFrame.BorderColor3 = CONFIG.COLORS.BLACK
-    playerFrame.SizeConstraint = Enum.SizeConstraint.RelativeXX
+    playerFrame.SizeConstraint = Enum.SizeConstraint.RelativeXY -- Responsivo padrão
     playerFrame.Size = CONFIG.PLAYER_FRAME_SIZE
     playerFrame.BorderSizePixel = 0
     playerFrame.BackgroundColor3 = CONFIG.COLORS.WHITE
@@ -486,17 +489,25 @@ function BetterLeaderboard:enable()
     
     -- Connect PlayerRemoving event
     local playerRemovingConn = Players.PlayerRemoving:Connect(function(playerObj)
+        -- Se o jogador que saiu for o alvo da câmera, desativa o spectate e volta para o LocalPlayer
+        if self._currentCameraTarget == playerObj then
+            self:_toggleCameraToPlayer(playerObj)
+        end
+        
         -- Remove frame
         local frame = self._playerFrames[playerObj]
         if frame and frame.Parent then
             frame:Destroy()
         end
         self._playerFrames[playerObj] = nil
-        -- Disconnect label connections
+        
+        -- Disconnect label connections usando ConnectionManager para evitar leaks de memória
         local conns = self._playerLabelConns[playerObj]
         if conns then
             for _, c in ipairs(conns) do
-                if c then c:Disconnect() end
+                if c then
+                    self._connMgr:remove(c) -- Remove e desconecta de forma limpa
+                end
             end
             self._playerLabelConns[playerObj] = nil
         end
@@ -527,13 +538,12 @@ end
 function BetterLeaderboard:_updateCanvasSize()
     if not self.scrollingFrame then return end
     local playerCount = #Players:GetPlayers()
-    local frameHeight = 0
-    -- Calcula altura real do frame (usando offset de PLAYER_FRAME_SIZE)
+    local frameHeight = 26 -- Altura padrão da linha
     if typeof(CONFIG.PLAYER_FRAME_SIZE) == "UDim2" then
         frameHeight = CONFIG.PLAYER_FRAME_SIZE.Y.Offset
     end
-    local padding = 28.69
-    local totalHeight = playerCount * padding
+    local itemSpacing = 4 -- Deve corresponder ao Padding do UIListLayout
+    local totalHeight = playerCount * (frameHeight + itemSpacing)
     local minHeight = 220
     self.scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(totalHeight, minHeight))
 end
