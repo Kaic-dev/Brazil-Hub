@@ -1,11 +1,36 @@
+-- Brazil Hub Loader
+-- O usuário deve executar apenas esta linha no executor:
+-- loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Loader"))()
+
 local ScriptURL = "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/CoreManager"
+local LoaderURL = "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Loader"
 
--- Executa o script agora (sempre)
-loadstring(game:HttpGet(ScriptURL))()
+-- Aguarda o carregamento inicial do jogo se necessário
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
 
--- Garante a execução automática ao teleportar (caso o executor suporte)
-if queue_on_teleport then
-    queue_on_teleport('loadstring(game:HttpGet("' .. ScriptURL .. '"))()')
+-- Tratamento de erros robusto para o download
+local success, result = pcall(function()
+    return game:HttpGet(ScriptURL)
+end)
+
+if success then
+    local func, err = loadstring(result)
+    if func then
+        -- Agenda o recarregamento do LOADER (não do CoreManager) para teleports futuros
+        local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
+        if queue then
+            pcall(function()
+                queue('loadstring(game:HttpGet("' .. LoaderURL .. '"))()')
+            end)
+        end
+
+        -- Executa o script principal
+        func()
+    else
+        warn("[Brazil Hub] Erro ao compilar script principal: " .. tostring(err))
+    end
 else
-    print("Executor não possui suporte a 'queue_on_teleport'")
+    warn("[Brazil Hub] Falha ao baixar o script principal. Verifique sua conexão ou status do GitHub!")
 end
