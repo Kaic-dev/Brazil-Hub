@@ -367,6 +367,20 @@ function AutoBlock:_getActiveAnimations(player)
     return animations
 end
 
+-- Clear cached data for a specific player (called on PlayerRemoving)
+function AutoBlock:_clearPlayerCache(playerName)
+    -- Remove all cache entries that belong to this player
+    local keysToRemove = {}
+    for key in pairs(self._playerCache) do
+        if key:sub(1, #playerName) == playerName then
+            keysToRemove[#keysToRemove + 1] = key
+        end
+    end
+    for i = 1, #keysToRemove do
+        self._playerCache[keysToRemove[i]] = nil
+    end
+end
+
 -- Optimized condition checking with early returns
 function AutoBlock:_checkCondition(condition, player, myPosition)
     local conditionType = condition.type
@@ -482,12 +496,12 @@ function AutoBlock:_evaluateThreat(threatConfig, player, myPosition)
                 return false
             end
         end
-        return true
+        return true, distance
     else
         -- Any condition can be true - exit early on first true
         for _, condition in ipairs(conditions) do
             if self:_checkCondition(condition, player, myPosition) then
-                return true
+                return true, distance
             end
         end
         return false
@@ -513,13 +527,14 @@ function AutoBlock:_scanPlayerForThreats(player, myPosition)
         end
         
         -- Evaluate threat conditions
-        if self:_evaluateThreat(threatConfig, player, myPosition) then
+        local matched, dist = self:_evaluateThreat(threatConfig, player, myPosition)
+        if matched then
             threatCount = threatCount + 1
             detectedThreats[threatCount] = {
                 id = threatId,
                 config = threatConfig,
                 player = player.Name,
-                distance = (myPosition - player.Character.HumanoidRootPart.Position).Magnitude,
+                distance = dist,
                 detectedAt = tick()
             }
         end
@@ -623,7 +638,11 @@ function AutoBlock:addThreat(threatId, config)
     config.blockDuration = config.blockDuration or 2.0
     
     for i, condition in ipairs(config.conditions) do
-        if not condition.type or not condition.value then
+        if not condition.type then
+            return false
+        end
+        -- FACING uses 'angle' instead of 'value', so skip value check for it
+        if condition.type ~= ConditionType.FACING and condition.value == nil then
             return false
         end
     end
@@ -733,11 +752,16 @@ function AutoBlock:enable()
     
     self.enabled = true
     
-    -- Connect to stepped for performance (lower frequency than heartbeat)
-    self._connectionManager:add(RunService.Stepped:Connect(function()
+    -- Heartbeat runs after physics, ensuring character positions are up-to-date
+    self._connectionManager:add(RunService.Heartbeat:Connect(function()
         if self.enabled then
             self:detectThreats()
         end
+    end))
+    
+    -- Clean player cache when a player leaves to prevent memory leaks
+    self._connectionManager:add(Players.PlayerRemoving:Connect(function(player)
+        self:_clearPlayerCache(player.Name)
     end))
     
     return true
@@ -780,13 +804,18 @@ function AutoBlock:getStatus()
     local singleThreats = self:getThreatsByType(false)
     local comboThreats = self:getThreatsByType(true)
     
+    -- Count dict entries (# operator doesn't work on dictionaries in Lua)
+    local singleCount, comboCount = 0, 0
+    for _ in pairs(singleThreats) do singleCount = singleCount + 1 end
+    for _ in pairs(comboThreats) do comboCount = comboCount + 1 end
+    
     return {
         enabled = self.enabled,
         currentlyBlocking = self._isCurrentlyBlocking,
         blockRadius = self.blockRadius,
-        singleThreats = #singleThreats,
-        comboThreats = #comboThreats,
-        totalThreats = #singleThreats + #comboThreats,
+        singleThreats = singleCount,
+        comboThreats = comboCount,
+        totalThreats = singleCount + comboCount,
         currentActiveThreats = #self._currentThreats,
         detectionSettings = self._detectionSettings,
         lastDetectionTime = self._lastDetectionTime
@@ -817,9 +846,19 @@ function AutoBlock:_isFacing(player, target, maxAngle)
     
     local fromPos = player.Character.HumanoidRootPart.Position
     local toPos = target.Character.HumanoidRootPart.Position
+    
+    -- Guard against identical positions (e.g. during respawn/teleport)
+    local delta = toPos - fromPos
+    if delta.Magnitude < 0.001 then
+        return true -- Same position = assume facing
+    end
+    
     local lookVector = player.Character.HumanoidRootPart.CFrame.LookVector
-    local direction = (toPos - fromPos).Unit
+    local direction = delta.Unit
     local dot = lookVector:Dot(direction)
+    
+    -- Clamp dot to [-1, 1] to prevent NaN from floating-point errors
+    dot = math.clamp(dot, -1, 1)
     local angle = math_deg(math_acos(dot))
     
     return angle <= (maxAngle or 45)
