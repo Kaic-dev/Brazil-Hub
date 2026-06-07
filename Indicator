@@ -167,6 +167,23 @@ function IndicatorController:enable()
 	self._connections[#self._connections + 1] = Players.PlayerAdded:Connect(function(player)
 		self:_trackPlayer(player)
 	end)
+
+	-- Connect to player leaving
+	self._connections[#self._connections + 1] = Players.PlayerRemoving:Connect(function(player)
+		local character = player.Character
+		if character then
+			local instance = self._instances[character]
+			if instance then
+				if instance._conn then
+					pcall(function() instance._conn:Disconnect() end)
+				end
+				if instance._ancestryConn then
+					pcall(function() instance._ancestryConn:Disconnect() end)
+				end
+				self._instances[character] = nil
+			end
+		end
+	end)
 end
 
 --// Function: IndicatorController:disable
@@ -190,7 +207,10 @@ function IndicatorController:disable()
 	-- Disconnect all character-specific connections (optimized iteration)
 	for character, instance in pairs(self._instances) do
 		if instance._conn then
-			instance._conn:Disconnect()
+			pcall(function() instance._conn:Disconnect() end)
+		end
+		if instance._ancestryConn then
+			pcall(function() instance._ancestryConn:Disconnect() end)
 		end
 		self._instances[character] = nil
 	end
@@ -254,14 +274,19 @@ function IndicatorController:_trackCharacter(character)
 	self._instances[character] = instance
 
 	-- Cleanup when character is removed
-	character.AncestryChanged:Connect(function(_, parent)
+	local ancestryConn
+	ancestryConn = character.AncestryChanged:Connect(function(_, parent)
 		if not parent then
 			if instance._conn then
-				instance._conn:Disconnect()
+				pcall(function() instance._conn:Disconnect() end)
+			end
+			if ancestryConn then
+				pcall(function() ancestryConn:Disconnect() end)
 			end
 			self._instances[character] = nil
 		end
 	end)
+	instance._ancestryConn = ancestryConn
 end
 
 -- ========================================
