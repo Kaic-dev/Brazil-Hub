@@ -1,29 +1,42 @@
 -- URL do Módulo
 local SUPER_LEADERBOARD_URL = "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/CustomLBModule"
 
--- Função para carregar o módulo usando game:HttpGet e loadstring
-local function loadSuperLeaderboard()
+local function safeLoadModule(url, name)
     local success, result = pcall(function()
-        -- Faz a requisição HTTP para obter o código do módulo
-        return game:HttpGet(SUPER_LEADERBOARD_URL)
+        return game:HttpGet(url)
     end)
 
-    if success then
-        -- Converte o código carregado em uma função executável
-        local moduleFunction, loadError = loadstring(result)
-        if not moduleFunction then
-            error("Erro ao carregar o módulo: " .. (loadError or "Erro desconhecido"))
-        end
-
-        -- Retorna o módulo carregado
-        return moduleFunction()
-    else
-        error("Erro ao baixar o módulo: " .. (result or "Erro desconhecido"))
+    if not success then
+        warn("[Init] Failed to download module:", name or url, tostring(result))
+        return nil
     end
+
+    local moduleFunction, loadError = loadstring(result)
+    if not moduleFunction then
+        warn("[Init] Failed to compile module:", name or url, tostring(loadError))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunction)
+    if not ok then
+        warn("[Init] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+-- Função para carregar o módulo usando game:HttpGet e loadstring
+local function loadSuperLeaderboard()
+    return safeLoadModule(SUPER_LEADERBOARD_URL, "SuperLeaderboard")
 end
 
 -- Carregar o SuperLeaderboardModule
 local SuperLeaderboardModule = loadSuperLeaderboard()
+if not SuperLeaderboardModule then
+    warn("[Init] SuperLeaderboardModule não foi carregado")
+    return
+end
 
 -- Instanciar o SuperLeaderboard
 local leaderboard = SuperLeaderboardModule.new()
