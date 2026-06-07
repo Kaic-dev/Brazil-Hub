@@ -8,9 +8,9 @@ local Players = game:GetService("Players")
 local CONFIG = {
     LEADERBOARD_SIZE = UDim2.new(0, 180, 0, 250), -- Tamanho fixo em pixels para consistência
     SCROLLING_FRAME_SIZE = UDim2.new(1, -16, 1, -16), -- Ajustado para caber perfeitamente dentro do container
-    PLAYER_FRAME_SIZE = UDim2.new(1, 0, 0, 26), -- Altura fixa de 26px para evitar distorção
-    PRESTIGE_BUTTON_SIZE = UDim2.new(0, 30, 0, 18),
-    PLAYER_LABEL_SIZE = UDim2.new(1, -35, 0, 20), -- Limita a largura para evitar vazamento horizontal
+    PLAYER_FRAME_SIZE = UDim2.new(1, 0, 0, 30), -- Linha mais espaçada para melhor legibilidade
+    PRESTIGE_BUTTON_SIZE = UDim2.new(0, 30, 0, 24),
+    PLAYER_LABEL_SIZE = UDim2.new(1, -48, 1, 0), -- Mais espaço para o texto e margens
     RETRY_INTERVAL = 1,
     PLAYERGUI_TIMEOUT = 5,
     
@@ -141,7 +141,7 @@ function BetterLeaderboard:_createScrollingFrame(parent)
     -- Add list layout for automatic ordering
     local listLayout = Instance.new("UIListLayout")
     listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    listLayout.Padding = UDim.new(0, 4) -- Espaçamento sutil de 4px entre cada linha
+    listLayout.Padding = UDim.new(0, 6) -- Espaçamento maior entre as linhas para respirabilidade
     listLayout.Parent = scrollingFrame
     
     scrollingFrame.Parent = parent
@@ -235,9 +235,10 @@ function BetterLeaderboard:_createPrestigeButton(prestige, parent)
     prestigeButton.FontSize = Enum.FontSize.Size18
     prestigeButton.TextColor3 = CONFIG.COLORS.WHITE
     prestigeButton.TextTransparency = 0.2
-    prestigeButton.Text = "#" .. tostring(prestige > 0 and prestige or "???")
+    prestigeButton.Text = "#" .. tostring(prestige > 0 and prestige or "??")
     prestigeButton.TextStrokeTransparency = 0.5
     prestigeButton.Size = CONFIG.PRESTIGE_BUTTON_SIZE
+    prestigeButton.Position = UDim2.new(0, 6, 0, 3)
     prestigeButton.Font = Enum.Font.SourceSansSemibold
     prestigeButton.BackgroundTransparency = 1
     prestigeButton.TextXAlignment = Enum.TextXAlignment.Left
@@ -313,15 +314,16 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     playerLabel.TextColor3 = isObserved and Color3.fromRGB(80, 180, 255)
         or (hasCharacter and CONFIG.COLORS.WHITE or Color3.fromRGB(120, 120, 120))
     playerLabel.BorderColor3 = CONFIG.COLORS.BLACK
-    playerLabel.Text = rogueName or "Loading"
+    playerLabel.Text = rogueName or "Carregando..."
     playerLabel:SetAttribute("RogueDisplay", rogueName or "")
     playerLabel:SetAttribute("PlayerUserId", player.UserId)
     playerLabel.TextXAlignment = Enum.TextXAlignment.Left
+    playerLabel.TextYAlignment = Enum.TextYAlignment.Center
     playerLabel.TextStrokeTransparency = 0.5
     playerLabel.Size = CONFIG.PLAYER_LABEL_SIZE
     playerLabel.Font = Enum.Font.SourceSansSemibold
     playerLabel.BackgroundTransparency = 1
-    playerLabel.Position = UDim2.new(0, 30, 0, 0)
+    playerLabel.Position = UDim2.new(0, 42, 0, 0)
     playerLabel.TextSize = 18
     playerLabel.BorderSizePixel = 0
     playerLabel.BackgroundColor3 = CONFIG.COLORS.WHITE
@@ -571,11 +573,11 @@ end
 function BetterLeaderboard:_updateCanvasSize()
     if not self.scrollingFrame then return end
     local playerCount = #Players:GetPlayers()
-    local frameHeight = 26 -- Altura padrão da linha
+    local frameHeight = 30 -- Altura padrão da linha
     if typeof(CONFIG.PLAYER_FRAME_SIZE) == "UDim2" then
         frameHeight = CONFIG.PLAYER_FRAME_SIZE.Y.Offset
     end
-    local itemSpacing = 4 -- Deve corresponder ao Padding do UIListLayout
+    local itemSpacing = 6 -- Deve corresponder ao Padding do UIListLayout
     local totalHeight = playerCount * (frameHeight + itemSpacing)
     local minHeight = 220
     self.scrollingFrame.CanvasSize = UDim2.new(0, 0, 0, math.max(totalHeight, minHeight))
