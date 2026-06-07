@@ -142,9 +142,6 @@ local function cleanMeshId(id)
     str = str:gsub("%s+", "")
     -- Remove rbxassetid:// se presente
     str = str:gsub("rbxassetid://", "")
-    -- Debug: print para verificar se os IDs estão sendo limpos corretamente
-    print("Original MeshID:", id)
-    print("Cleaned MeshID:", str)
     return str
 end
 
@@ -343,30 +340,32 @@ function TrinketESP:processQueue()
     
     self._processingQueue = true
     
-    -- Processa até 5 trinkets por frame para evitar lag
-    local maxPerFrame = Config.ESP.MaxProcessPerFrame
-    local processed = 0
-    
-    while #self._pendingTrinkets > 0 and processed < maxPerFrame do
-        local trinket = table.remove(self._pendingTrinkets, 1)
-        
-        -- Verificar se o trinket ainda é válido
-        if trinket and trinket.Parent and not self._processedObjects[trinket] then
-            self._processedObjects[trinket] = true
-            local trinketName = getTrinketInfo(trinket)
-            self:createBillboard(trinket, trinketName)
+    task.spawn(function()
+        while #self._pendingTrinkets > 0 and self.enabled do
+            local maxPerFrame = Config.ESP.MaxProcessPerFrame
+            local processed = 0
+            
+            while #self._pendingTrinkets > 0 and processed < maxPerFrame do
+                local trinket = table.remove(self._pendingTrinkets, 1)
+                
+                -- Verificar se o trinket ainda é válido
+                if trinket and trinket.Parent and not self._processedObjects[trinket] then
+                    self._processedObjects[trinket] = true
+                    local trinketName = getTrinketInfo(trinket)
+                    pcall(function()
+                        self:createBillboard(trinket, trinketName)
+                    end)
+                end
+                
+                processed = processed + 1
+            end
+            
+            if #self._pendingTrinkets > 0 and self.enabled then
+                RunService.Heartbeat:Wait()
+            end
         end
-        
-        processed = processed + 1
-    end
-    
-    self._processingQueue = false
-    
-    -- Se ainda há trinkets na fila, agenda próximo processamento
-    if #self._pendingTrinkets > 0 then
-        RunService.Heartbeat:Wait()
-        self:processQueue()
-    end
+        self._processingQueue = false
+    end)
 end
 
 -- SOLUÇÃO 2: Detecção imediata com processamento assíncrono
