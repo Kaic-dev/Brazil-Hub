@@ -19,6 +19,22 @@ function ConnectionManager:connect(signal, callback)
     return conn
 end
 
+-- Conecta um sinal a uma função com tratamento de erros integrado (pcall)
+-- @param signal O sinal (evento) a ser conectado
+-- @param callback A função a ser chamada quando o evento for disparado
+-- @return A conexão criada
+function ConnectionManager:safeConnect(signal, callback)
+    local safeCallback = function(...)
+        local success, err = pcall(callback, ...)
+        if not success then
+            warn("[Brazil Hub SafeCall Error]:", tostring(err))
+        end
+    end
+    local conn = signal:Connect(safeCallback)
+    self:add(conn)
+    return conn
+end
+
 -- Adiciona uma conexão existente ao manager
 -- @param conn A conexão a ser adicionada (deve ser uma RBXScriptConnection)
 function ConnectionManager:add(conn)
