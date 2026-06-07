@@ -41,87 +41,85 @@ function UtilsService.new()
     local self = setmetatable({}, UtilsService)
     
     -- Initialize sub-modules
-    self.playerData = PlayerData.new()
-    self.forceField = ForceField.new()
-    self.toolManager = ToolManager.new()
-    self.billboardUtils = BillboardUtils.new()
+    self.playerData = PlayerData and PlayerData.new() or nil
+    self.forceField = ForceField and ForceField.new() or nil
+    self.toolManager = ToolManager and ToolManager.new() or nil
+    self.billboardUtils = BillboardUtils and BillboardUtils.new() or nil
     
     return self
 end
 
 --// PlayerData Delegation Methods
 function UtilsService:getPlayerBasicData(player)
-    return self.playerData:getBasicData(player)
+    return self.playerData and self.playerData:getBasicData(player) or nil
 end
 
 function UtilsService:getPlayerRogueData(player)
-    return self.playerData:getRogueData(player)
+    return self.playerData and self.playerData:getRogueData(player) or nil
 end
 
 function UtilsService:getPlayerEdictData(player)
-    return self.playerData:getEdictData(player)
+    return self.playerData and self.playerData:getEdictData(player) or nil
 end
 
 function UtilsService:getPlayerPrestigeData(player)
-    return self.playerData:getPrestigeData(player)
+    return self.playerData and self.playerData:getPrestigeData(player) or nil
 end
 
 function UtilsService:getPlayerHealthData(player)
-    return self.playerData:getHealthData(player)
+    return self.playerData and self.playerData:getHealthData(player) or nil
 end
 
 function UtilsService:getPlayerFullData(player)
-    return self.playerData:getFullData(player)
+    return self.playerData and self.playerData:getFullData(player) or nil
 end
 
 function UtilsService:getPlayerRogueDisplay(player)
-    return self.playerData:getRogueDisplay(player)
+    return self.playerData and self.playerData:getRogueDisplay(player) or nil
 end
 
 function UtilsService:getPlayerEdictDisplay(player)
-    return self.playerData:getEdictDisplay(player)
+    return self.playerData and self.playerData:getEdictDisplay(player) or nil
 end
 
 function UtilsService:getPlayerHealthDisplay(player)
-    return self.playerData:getHealthDisplay(player)
+    return self.playerData and self.playerData:getHealthDisplay(player) or nil
 end
 
 --// ForceField Delegation Methods
 function UtilsService:hasForceField(player)
-    return self.forceField:hasForceField(player)
+    return self.forceField and self.forceField:hasForceField(player) or false
 end
 
 function UtilsService:getForceFieldTimeLeft(player)
-    return self.forceField:getTimeLeft(player)
+    return self.forceField and self.forceField:getTimeLeft(player) or 0
 end
 
 function UtilsService:getForceFieldColor(timeLeft)
-    return self.forceField:getColor(timeLeft)
+    return self.forceField and self.forceField:getColor(timeLeft) or Color3.fromRGB(255, 255, 255)
 end
 
 function UtilsService:getForceFieldData(player)
-    return self.forceField:getData(player)
+    return self.forceField and self.forceField:getData(player) or {
+        hasForceField = false,
+        timeLeft = 0,
+        timeLeftFormatted = "0.0s",
+        color = Color3.fromRGB(255, 255, 255),
+        status = "Inactive"
+    }
 end
 
 function UtilsService:getForceFieldStatus(player)
-    return self.forceField:getStatus(player)
-end
-
-function UtilsService:isForceFieldActive(player)
-    return self.forceField:isActive(player)
-end
-
-function UtilsService:getForceFieldTimeRemaining(player)
-    return self.forceField:getTimeRemaining(player)
+    return self.forceField and self.forceField:getStatus(player) or "FF: Inactive"
 end
 
 --// ToolManager Delegation Methods
 function UtilsService:getPlayerTools(player)
-    return self.toolManager:getPlayerTools(player)
+    return self.toolManager and self.toolManager:getPlayerTools(player) or {}
 end
 
 function UtilsService:getToolDetails(tool)
-    return self.toolManager:getToolDetails(tool)
+    return self.toolManager and self.toolManager:getToolDetails(tool) or { name = tool and tool.Name or "Unknown" }
 end
 
 function UtilsService:getEquippedTool(player)
@@ -131,8 +129,8 @@ function UtilsService:getEquippedTool(player)
 end
 
 function UtilsService:getToolCount(player)
-    local tools = self.toolManager:getPlayerTools(player)
-    return #tools
+    local tools = self.toolManager and self.toolManager:getPlayerTools(player) or nil
+    return tools and #tools or 0
 end
 
 --// Backward Compatibility Methods (for existing code)
@@ -142,19 +140,19 @@ end
 
 --// Billboard/Frame/Label Utility Methods
 function UtilsService:createBillboard(parent, adornee, size, name)
-    return self.billboardUtils:createBillboard(parent, adornee, size, name)
+    return self.billboardUtils and self.billboardUtils:createBillboard(parent, adornee, size, name) or nil
 end
 
 function UtilsService:createFrameWithLayout(parent, frameName, layoutConfig)
-    return self.billboardUtils:createFrameWithLayout(parent, frameName, layoutConfig)
+    return self.billboardUtils and self.billboardUtils:createFrameWithLayout(parent, frameName, layoutConfig) or nil
 end
 
 function UtilsService:createLabel(parent, text)
-    return self.billboardUtils:createLabel(parent, text)
+    return self.billboardUtils and self.billboardUtils:createLabel(parent, text) or nil
 end
 
 function UtilsService:createUIListLayout(parent, layoutConfig)
-    return self.billboardUtils:createUIListLayout(parent, layoutConfig)
+    return self.billboardUtils and self.billboardUtils:createUIListLayout(parent, layoutConfig) or nil
 end
 
 --// Main Export
