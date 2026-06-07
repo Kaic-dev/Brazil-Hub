@@ -209,8 +209,9 @@ local folderCache = {}
 
 function TriggerMonitor:getFolderByPath(pathArray)
     local pathKey = tableConcat(pathArray, ".")
-    if folderCache[pathKey] then
-        return folderCache[pathKey]
+    local cached = folderCache[pathKey]
+    if cached and cached.Parent and cached:IsDescendantOf(game) then
+        return cached
     end
     
     local obj = game
@@ -314,6 +315,7 @@ function TriggerMonitor:destroy()
     self._triggerListBuffer = nil
     -- Clear timestamp cache
     timestampCache = {}
+    folderCache = {}
 end
 
 return TriggerMonitor
