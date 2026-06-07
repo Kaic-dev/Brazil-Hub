@@ -94,10 +94,18 @@ local function updateBillboardLabel(player)
     if not billboard then return end
     local textBox = billboard:FindFirstChild("Tool")
     if not textBox then return end
-    local equippedTool = utils:getEquippedTool(player)
+    
+    local equippedTool = nil
+    if utils then
+        equippedTool = utils:getEquippedTool(player)
+    else
+        local character = player and player.Character
+        equippedTool = character and character:FindFirstChildOfClass("Tool")
+    end
+    
     if equippedTool then
-        local details = utils:getToolDetails(equippedTool)
-        textBox.Text = details and details.name or ""
+        local details = utils and utils:getToolDetails(equippedTool)
+        textBox.Text = details and details.name or equippedTool.Name
         textBox.TextTransparency = 0
     else
         textBox.Text = ""
