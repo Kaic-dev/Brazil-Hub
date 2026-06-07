@@ -409,12 +409,12 @@ local function createMainTabComponents(mainTab, fovManager)
         if now - lastConnectionUpdate < connectionUpdateInterval then return end
         lastConnectionUpdate = now
         
-        ffLabel:SetText('FFDetector: ' .. (ModuleInstances.ffDetector._connMgr and ModuleInstances.ffDetector._connMgr:count() or 0))
-        espLabel:SetText('PlayerESP: ' .. (ModuleInstances.playerEsp._connMgr and ModuleInstances.playerEsp._connMgr:count() or 0))
-        trinketLabel:SetText('TrinketESP: ' .. (ModuleInstances.trinketEsp._connMgr and ModuleInstances.trinketEsp._connMgr:count() or 0))
-        leaderboardLabel:SetText('BetterLeaderboard: ' .. (ModuleInstances.betterLeaderboard._connMgr and ModuleInstances.betterLeaderboard._connMgr:count() or 0))
-        nofogLabel:SetText('NoFog: ' .. (NoFog._connMgr and NoFog._connMgr:count() or 0))
-        intentLabel:SetText('Intent: ' .. (Intent.connectionMgr and Intent.connectionMgr:count() or 0))
+        ffLabel:SetText('FFDetector: ' .. (ModuleInstances.ffDetector and ModuleInstances.ffDetector._connMgr and ModuleInstances.ffDetector._connMgr:count() or 0))
+        espLabel:SetText('PlayerESP: ' .. (ModuleInstances.playerEsp and ModuleInstances.playerEsp._connMgr and ModuleInstances.playerEsp._connMgr:count() or 0))
+        trinketLabel:SetText('TrinketESP: ' .. (ModuleInstances.trinketEsp and ModuleInstances.trinketEsp._connectionManager and ModuleInstances.trinketEsp._connectionManager:count() or 0))
+        leaderboardLabel:SetText('BetterLeaderboard: ' .. (ModuleInstances.betterLeaderboard and ModuleInstances.betterLeaderboard._connMgr and ModuleInstances.betterLeaderboard._connMgr:count() or 0))
+        nofogLabel:SetText('NoFog: ' .. (NoFog and NoFog._connMgr and NoFog._connMgr:count() or 0))
+        intentLabel:SetText('Intent: ' .. (Intent and Intent.connectionMgr and Intent.connectionMgr:count() or 0))
         scriptLabel:SetText('Script: ' .. (connMgr and connMgr:count() or 0))
     end
     
@@ -788,13 +788,13 @@ SaveManager:LoadAutoloadConfig()
     -- Setup cleanup when script is unloaded
     Library.OnUnload = function()
         if connMgr then
-            connMgr:clear()
+            pcall(function() connMgr:disconnectAll() end)
         end
         if triggerMonitor then
-            triggerMonitor:destroy()
+            pcall(function() triggerMonitor:destroy() end)
         end
         if fovManager then
-            fovManager:destroy()
+            pcall(function() fovManager:destroy() end)
         end
     end
 end
