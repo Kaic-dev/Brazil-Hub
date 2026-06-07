@@ -55,34 +55,53 @@ waitForLoaded()
 local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/"
 
--- Carrega LinoriaLib
-local Library = loadstring(game:HttpGet(REPO_BASE_URL .. 'Library.lua'))()
-
--- Carrega e executa o sistema de key
-local KeyHandler = loadstring(game:HttpGet(BRAZIL_HUB_BASE_URL .. 'KeyHandler'))()
-local keyHandler = KeyHandler.new(Library)
-keyHandler:requireValidKey()
-
--- Load LinoriaLib components
-local ThemeManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/ThemeManager.lua'))()
-local SaveManager = loadstring(game:HttpGet(REPO_BASE_URL .. 'addons/SaveManager.lua'))()
-
--- Safe module loading with pcall to prevent script breakage if any module fails
-local function safeRequire(url)
-    local ok, result = pcall(function()
-        return loadstring(game:HttpGet(url))()
+-- Helper para carregar módulos remotos com proteção
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
     end)
-    if ok then
-        return result
-    else
-        warn("[BrazilHub] Module load error:", url)
-        warn("error:", tostring(result))
+    if not success then
+        warn("[BrazilHub] Failed to download module:", name or url, tostring(result))
         return nil
     end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[BrazilHub] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[BrazilHub] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+-- Carrega LinoriaLib
+local Library = safeRequireRemote(REPO_BASE_URL .. 'Library.lua', 'Library')
+
+-- Carrega e executa o sistema de key
+local KeyHandler = safeRequireRemote(BRAZIL_HUB_BASE_URL .. 'KeyHandler', 'KeyHandler')
+local keyHandler = KeyHandler and KeyHandler.new and KeyHandler.new(Library)
+if keyHandler then
+    keyHandler:requireValidKey()
+else
+    warn("[BrazilHub] KeyHandler não carregado")
+end
+
+-- Load LinoriaLib components
+local ThemeManager = safeRequireRemote(REPO_BASE_URL .. 'addons/ThemeManager.lua', 'ThemeManager')
+local SaveManager = safeRequireRemote(REPO_BASE_URL .. 'addons/SaveManager.lua', 'SaveManager')
+
+local function safeRequire(url)
+    return safeRequireRemote(url)
 end
 
 -- Load main-modules
-local FFDetector = safeRequire(BRAZIL_HUB_BASE_URL .. "Modules/ForceField/Core/FFHandler/ForceFieldManager")
+local FFDetector = safeRequire(BRAZIL_HUB_BASE_URL .. "Modules/ForceField/Core/ForceFieldManager")
 local PlayerESP = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
 local AutoAim = safeRequire(BRAZIL_HUB_BASE_URL .. "Auto-Aim")
 local BetterLeaderboard = safeRequire(BRAZIL_HUB_BASE_URL .. "betterleaderboard")
@@ -209,7 +228,6 @@ local triggerMonitor = TriggerMonitor and TriggerMonitor.new(connMgr) or nil
 local UICallbacks = {}
 
 -- FF Detector callbacks
---[[
 function UICallbacks.onToggleFFDetector(enabled)
     if enabled then
         ModuleInstances.ffDetector:enable()
@@ -219,7 +237,6 @@ function UICallbacks.onToggleFFDetector(enabled)
         print("[FF Detector] Disabled")
     end
 end
-]]
 
 function UICallbacks.onBillboardDistanceChanged(value)
     ModuleInstances.ffDetector:setBillboardMaxDistance(value)
@@ -426,11 +443,9 @@ local function createMainTabComponents(mainTab, fovManager)
     Tooltip = 'Detect and show countdown for player ForceField',
         Callback = UICallbacks.onToggleFFDetector
 })
---[[
 if ffToggle.Value then
         UICallbacks.onToggleFFDetector(true)
 end
-]]
     utilsGroup:AddSlider('Billboard Max Distance', {
     Text = 'Billboard Max Distance',
         Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE,
@@ -448,8 +463,8 @@ end
         Callback = UICallbacks.onBillboardTextSizeChanged
 })
 
-    local Indicator = loadstring(game:HttpGet(BRAZIL_HUB_BASE_URL .. "Indicator"))()
-    local indicator = Indicator.new()
+    local Indicator = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "Indicator", 'Indicator')
+    local indicator = Indicator and Indicator.new and Indicator.new() or nil
     utilsGroup:AddToggle('EnableDamageRegenIndicators', {
         Text = 'Enable Damage/Regen Indicators',
         Default = false,
