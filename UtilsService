@@ -3,10 +3,34 @@
 -- Usage: local Utils = require(path); local utils = Utils.new(); utils:getPlayerData(player)
 
 -- Load sub-modules using loadstring
-local PlayerData = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/PlayerData"))()
-local ForceField = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/ForceField"))()
-local ToolManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/ToolManager"))()
-local BillboardUtils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/BillboardUtils"))()
+local function safeRequireRemote(url, name)
+    local ok, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not ok then
+        warn("[UtilsService] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[UtilsService] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local success, module = pcall(moduleFunc)
+    if not success then
+        warn("[UtilsService] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+local PlayerData = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/PlayerData", "PlayerData")
+local ForceField = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/ForceField", "ForceField")
+local ToolManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/ToolManager", "ToolManager")
+local BillboardUtils = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/BillboardUtils", "BillboardUtils")
 
 local UtilsService = {}
 UtilsService.__index = UtilsService
