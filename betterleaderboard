@@ -35,14 +35,40 @@ local CONFIG = {
 local UtilsService = nil
 local utils = nil
 
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("[BetterLeaderboard] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[BetterLeaderboard] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[BetterLeaderboard] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
 local function initializeUtilsService()
     local success, result = pcall(function()
-        return loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService"))()
+        return safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService", "UtilsService")
     end)
     
-    if success then
+    if success and result then
         UtilsService = result
         utils = UtilsService.new()
+    else
+        warn("[BetterLeaderboard] UtilsService não foi carregado")
     end
 end
 
@@ -53,7 +79,14 @@ initializeUtilsService()
 local BetterLeaderboard = {}
 BetterLeaderboard.__index = BetterLeaderboard
 
-local ConnectionManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager"))()
+local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+    new = function()
+        return {
+            add = function() end,
+            disconnectAll = function() end
+        }
+    end
+}
 
 --- Creates a new BetterLeaderboard instance
 -- @return BetterLeaderboard: New instance of the leaderboard
