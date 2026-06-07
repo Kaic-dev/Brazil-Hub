@@ -62,7 +62,12 @@ function KeyHandler:promptKey()
     screenGui.Name = "BrazilHubKeyUI"
     screenGui.ResetOnSpawn = false
     screenGui.IgnoreGuiInset = true
-    screenGui.Parent = player:WaitForChild("PlayerGui")
+    local playerGui = player:WaitForChild("PlayerGui", 5)
+    if not playerGui then
+        warn("[KeyHandler] PlayerGui not found. Cannot prompt key.")
+        return nil
+    end
+    screenGui.Parent = playerGui
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0, 0, 0, 0)
@@ -157,19 +162,25 @@ function KeyHandler:promptKey()
         end
     end)
 
-    -- Espera até o usuário digitar e confirmar
-    repeat task.wait() until keyReceived
-
-    -- Animação de saída (fade-out + scale)
-    local tweenOut = TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-        Size = UDim2.new(0, 0, 0, 0),
-        BackgroundTransparency = 1
-    })
-    tweenOut:Play()
-    tweenOut.Completed:Wait()
-
-    screenGui:Destroy()
-    self:saveKey(keyValue)
+    -- Espera até o usuário digitar e confirmar ou a UI ser destruída
+    while not keyReceived and screenGui and screenGui.Parent do
+        task.wait(0.1)
+    end
+ 
+    if screenGui and screenGui.Parent then
+        -- Animação de saída (fade-out + scale)
+        local tweenOut = TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            Size = UDim2.new(0, 0, 0, 0),
+            BackgroundTransparency = 1
+        })
+        tweenOut:Play()
+        pcall(function() tweenOut.Completed:Wait() end)
+        pcall(function() screenGui:Destroy() end)
+    end
+    
+    if keyValue then
+        self:saveKey(keyValue)
+    end
     return keyValue
 end
 
@@ -199,6 +210,9 @@ function KeyHandler:requireValidKey()
     end
     while not self:validateKey(key) do
         key = self:promptKey()
+        if not key then
+            task.wait(1) -- Evita loop rápido se a UI falhar
+        end
     end
     self:saveKey(key)
     self.key = key
