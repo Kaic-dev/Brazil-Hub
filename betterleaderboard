@@ -330,7 +330,7 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     playerLabel.Parent = parent
 
     -- Hover
-    self:_setupLabelHover(playerLabel, player)
+    local hoverEnterConn, hoverLeaveConn = self:_setupLabelHover(playerLabel, player)
 
     -- Right-click: alterna câmera
     local mouseConn = playerLabel.MouseButton2Click:Connect(function()
@@ -375,7 +375,9 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     self._connMgr:add(mouseConn)
     self._connMgr:add(charAddedConn)
     self._connMgr:add(charRemovingConn)
-    self._playerLabelConns[player] = {charAddedConn, charRemovingConn, mouseConn}
+    self._connMgr:add(hoverEnterConn)
+    self._connMgr:add(hoverLeaveConn)
+    self._playerLabelConns[player] = {charAddedConn, charRemovingConn, mouseConn, hoverEnterConn, hoverLeaveConn}
 
     return playerLabel
 end
@@ -384,11 +386,11 @@ end
 -- @param playerLabel TextButton: The label to add hover to
 -- @param player Player: The player this label represents
 function BetterLeaderboard:_setupLabelHover(playerLabel, player)
-    playerLabel.MouseEnter:Connect(function()
+    local enter = playerLabel.MouseEnter:Connect(function()
         playerLabel.TextColor3 = CONFIG.COLORS.GRAY
         playerLabel.Text = player.Name
     end)
-    playerLabel.MouseLeave:Connect(function()
+    local leave = playerLabel.MouseLeave:Connect(function()
         if self._currentCameraTarget == player then
             playerLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
         elseif player.Character then
@@ -399,6 +401,7 @@ function BetterLeaderboard:_setupLabelHover(playerLabel, player)
         local rogueDisplay = playerLabel:GetAttribute("RogueDisplay")
         playerLabel.Text = (rogueDisplay and rogueDisplay ~= "") and rogueDisplay or "Loading"
     end)
+    return enter, leave
 end
 
 --- Starts async loading of rogue name if not initially available
@@ -410,7 +413,7 @@ function BetterLeaderboard:_startRogueNameLoading(playerLabel, player)
     end
     
     task.spawn(function()
-        while playerLabel and playerLabel.Parent do
+        while self.enabled and playerLabel and playerLabel.Parent do
             local display = utils:getPlayerRogueDisplay(player)
             if display and #display > 0 then
                 playerLabel:SetAttribute("RogueDisplay", display)
