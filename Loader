@@ -27,7 +27,10 @@ if success then
         end
 
         -- Executa o script principal
-        func()
+        local execOk, execErr = pcall(func)
+        if not execOk then
+            warn("[Brazil Hub] Erro ao executar script principal:", tostring(execErr))
+        end
     else
         warn("[Brazil Hub] Erro ao compilar script principal: " .. tostring(err))
     end
