@@ -23,6 +23,7 @@ end
 function PerformanceMonitor:start()
     if self.isEnabled then return end
     self.isEnabled = true
+    self.lastFrameTime = tick()
     
     self.connection = RunService.Heartbeat:Connect(function()
         self:update()
@@ -58,10 +59,10 @@ function PerformanceMonitor:update()
     end
     
     if self.performanceLabel then
-        local fps = 1 / frameTime
-        local avgFps = 1 / self.avgFrameTime
-        local maxFps = 1 / self.minFrameTime
-        local minFps = 1 / self.maxFrameTime
+        local fps = frameTime > 0 and 1 / frameTime or 0
+        local avgFps = self.avgFrameTime > 0 and 1 / self.avgFrameTime or 0
+        local maxFps = self.minFrameTime > 0 and 1 / self.minFrameTime or 0
+        local minFps = self.maxFrameTime > 0 and 1 / self.maxFrameTime or 0
         
         self.performanceLabel:SetText(string.format(
             "FPS: %.1f (Avg: %.1f, Max: %.1f, Min: %.1f)",
