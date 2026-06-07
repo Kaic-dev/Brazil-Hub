@@ -6,7 +6,38 @@ NoFog.enabled = false
 NoFog._connections = {}
 NoFog._original = nil
 
-local ConnectionManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager"))()
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("[NoFog] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[NoFog] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[NoFog] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+    new = function()
+        return {
+            add = function() end,
+            disconnectAll = function() end
+        }
+    end
+}
 NoFog._connMgr = ConnectionManager.new()
 
 -- Lista de efeitos suportados
