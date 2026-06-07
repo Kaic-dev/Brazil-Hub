@@ -3,7 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local Debris = game:GetService("Debris")
 
-local LIVE_FOLDER = Workspace:WaitForChild("Live")
+local LIVE_FOLDER = Workspace:WaitForChild("Live", 5)
 local LocalPlayer = Players.LocalPlayer
 local Mouse = LocalPlayer:GetMouse()
 local RemoteFunction
@@ -15,7 +15,10 @@ if game.PlaceId == 14341521240 then
         end
     end
 else
-    RemoteFunction = ReplicatedStorage:WaitForChild("Requests"):WaitForChild("GetMouse")
+    local requests = ReplicatedStorage:WaitForChild("Requests", 5)
+    if requests then
+        RemoteFunction = requests:WaitForChild("GetMouse", 5)
+    end
 end
 
 local AutoAim = {}
@@ -167,6 +170,11 @@ function AutoAim:getBestNPC(localChar)
     local camPos = camera.CFrame.Position
     local fovHalf = self.fovMax * 0.5
     
+    if not LIVE_FOLDER then
+        LIVE_FOLDER = Workspace:FindFirstChild("Live") or Workspace:WaitForChild("Live", 1)
+    end
+    if not LIVE_FOLDER then return nil end
+
     local closestNPC, minAngle = nil, fovHalf
     local children = LIVE_FOLDER:GetChildren()
     
@@ -180,7 +188,8 @@ function AutoAim:getBestNPC(localChar)
                 local _, onScreen = camera:WorldToViewportPoint(headPos)
                 if onScreen then
                     local npcDir = (headPos - camPos).Unit
-                    local angle = deg(acos(mouseDir:Dot(npcDir)))
+                    local dot = mouseDir:Dot(npcDir)
+                    local angle = deg(acos(math.clamp(dot, -1, 1)))
                     if angle < minAngle then
                         closestNPC = model
                         minAngle = angle
@@ -195,16 +204,44 @@ end
 
 function AutoAim:enable()
     if self.enabled then return end
+    
+    if not RemoteFunction then
+        if game.PlaceId == 14341521240 then
+            for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
+                if obj:IsA("RemoteFunction") and obj.Name == "" then
+                    RemoteFunction = obj
+                    break
+                end
+            end
+        else
+            local requests = ReplicatedStorage:FindFirstChild("Requests")
+            if requests then
+                RemoteFunction = requests:FindFirstChild("GetMouse")
+            end
+        end
+    end
+    
+    if not RemoteFunction then
+        warn("[Auto-Aim] RemoteFunction not found. Cannot enable.")
+        return
+    end
+
     self.enabled = true
+    
+    if not self._originalOnClientInvoke then
+        self._originalOnClientInvoke = RemoteFunction.OnClientInvoke
+    end
     
     -- Start periodic cleanup of target history
     local RunService = game:GetService("RunService")
     local lastCleanup = tick()
     
-    RunService.Heartbeat:Connect(function()
+    self._heartbeatConnection = RunService.Heartbeat:Connect(function()
         local currentTime = tick()
         if currentTime - lastCleanup > 5 then -- Cleanup every 5 seconds
-            self:cleanupTargetHistory()
+            pcall(function()
+                self:cleanupTargetHistory()
+            end)
             lastCleanup = currentTime
         end
     end)
@@ -223,7 +260,6 @@ function AutoAim:enable()
 
         if equippedTool and self.toolNames[equippedTool.Name] then
             local targetNPC = self:getBestNPC(character)
-            print(targetNPC)
             if targetNPC then
                 local npcHRP = targetNPC:FindFirstChild("HumanoidRootPart")
                 local npcHead = targetNPC:FindFirstChild("Head")
@@ -250,7 +286,7 @@ function AutoAim:enable()
                     marker.Color = Color3.new(0, 1, 0)
                     marker.Material = Enum.Material.Neon
                     marker.Position = hitPosition
-                    marker.Parent = Workspace
+                    marker.Parent = Workspace.CurrentCamera -- LOCAL ONLY
                     Debris:AddItem(marker, 2)
                     
                     -- Create current position marker (red) for comparison
@@ -261,7 +297,7 @@ function AutoAim:enable()
                     currentMarker.Color = Color3.new(1, 0, 0)
                     currentMarker.Material = Enum.Material.Neon
                     currentMarker.Position = npcHead.Position
-                    currentMarker.Parent = Workspace
+                    currentMarker.Parent = Workspace.CurrentCamera -- LOCAL ONLY
                     Debris:AddItem(currentMarker, 2)
 
                     return {Hit=CFrame.new(hitPosition), Target=targetNPC, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
@@ -276,7 +312,15 @@ end
 function AutoAim:disable()
     if not self.enabled then return end
     self.enabled = false
-    RemoteFunction.OnClientInvoke = nil
+    if self._heartbeatConnection then
+        self._heartbeatConnection:Disconnect()
+        self._heartbeatConnection = nil
+    end
+    if RemoteFunction then
+        pcall(function()
+            RemoteFunction.OnClientInvoke = self._originalOnClientInvoke
+        end)
+    end
 end
 
 return AutoAim
