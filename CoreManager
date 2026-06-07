@@ -80,6 +80,43 @@ local function safeRequireRemote(url, name)
     return module
 end
 
+-- Hook Drawing.new to fix compatibility issues on executors where Drawing objects' Visible property expects a number
+if Drawing and Drawing.new then
+    local oldDrawingNew = Drawing.new
+    Drawing.new = function(class)
+        local realObj = oldDrawingNew(class)
+        local proxy = newproxy(true)
+        local mt = getmetatable(proxy)
+        
+        mt.__index = function(t, k)
+            local val = realObj[k]
+            if type(val) == "function" then
+                return function(_, ...)
+                    return val(realObj, ...)
+                end
+            end
+            return val
+        end
+        
+        mt.__newindex = function(t, k, v)
+            if k == "Visible" then
+                local success = pcall(function()
+                    realObj.Visible = v
+                end)
+                if not success then
+                    pcall(function()
+                        realObj.Visible = (v == true and 1 or 0)
+                    end)
+                end
+            else
+                realObj[k] = v
+            end
+        end
+        
+        return proxy
+    end
+end
+
 -- Carrega LinoriaLib
 local Library = safeRequireRemote(REPO_BASE_URL .. 'Library.lua', 'Library')
 
