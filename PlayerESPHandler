@@ -118,7 +118,7 @@ local FRAME_CONFIG = {
                 dataKey = "rogueName",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return utils:getPlayerRogueDisplay(player)
+                    return utils and utils:getPlayerRogueDisplay(player) or ""
                 end
             },
             {
@@ -128,7 +128,7 @@ local FRAME_CONFIG = {
                 dataKey = "edict",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return utils:getPlayerEdictDisplay(player)
+                    return utils and utils:getPlayerEdictDisplay(player) or ""
                 end
             }
         }
@@ -148,8 +148,14 @@ local FRAME_CONFIG = {
                 dataKey = "healthDisplay",
                 showByDefault = true,
                 getData = function(player, cache)
-                    local healthDisplay, _ = utils:getPlayerHealthDisplay(player)
-                    return healthDisplay
+                    local healthDisplay = utils and utils:getPlayerHealthDisplay(player)
+                    if not healthDisplay and player.Character then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            healthDisplay = tostring(math.floor(hum.Health)) .. "/" .. tostring(math.floor(hum.MaxHealth))
+                        end
+                    end
+                    return healthDisplay or "0/100"
                 end
             },
             {
@@ -159,8 +165,17 @@ local FRAME_CONFIG = {
                 dataKey = "healthPercentDisplay",
                 showByDefault = true,
                 getData = function(player, cache)
-                    local _, healthPercentDisplay = utils:getPlayerHealthDisplay(player)
-                    return healthPercentDisplay
+                    local _, healthPercentDisplay = nil, nil
+                    if utils then
+                        _, healthPercentDisplay = utils:getPlayerHealthDisplay(player)
+                    end
+                    if not healthPercentDisplay and player.Character then
+                        local hum = player.Character:FindFirstChildOfClass("Humanoid")
+                        if hum and hum.MaxHealth > 0 then
+                            healthPercentDisplay = tostring(math.floor((hum.Health / hum.MaxHealth) * 100)) .. "%"
+                        end
+                    end
+                    return healthPercentDisplay or "0%"
                 end
             }
         }
@@ -327,7 +342,7 @@ function PlayerESP:updatePlayerData(player)
             local label = data.labels[labelConfig.key]
             if label and labelConfig.getData then
                 local value = labelConfig.getData(player, cache, localChar, targetChar)
-                label.Text = labelConfig.format:format(value)
+                label.Text = value and labelConfig.format:format(tostring(value)) or ""
             end
         end
     end
