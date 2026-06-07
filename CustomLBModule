@@ -26,15 +26,26 @@ local function loadSoundManager()
     if success then
         local moduleFunction, loadError = loadstring(result)
         if not moduleFunction then
-            error("Erro ao carregar o módulo SoundManager: " .. (loadError or "Erro desconhecido"))
+            warn("Erro ao carregar o módulo SoundManager:", loadError or "Erro desconhecido")
+            return nil
         end
-        return moduleFunction()
+
+        local ok, module = pcall(moduleFunction)
+        if not ok then
+            warn("Erro ao executar o módulo SoundManager:", tostring(module))
+            return nil
+        end
+
+        return module
     else
-        error("Erro ao baixar o módulo SoundManager: " .. (result or "Erro desconhecido"))
+        warn("Erro ao baixar o módulo SoundManager:", result or "Erro desconhecido")
+        return nil
     end
 end
 
-local SoundManager = loadSoundManager()
+local SoundManager = loadSoundManager() or {
+    playSound = function() end
+}
 
 local COLORS = {
 	default = Color3.fromRGB(255, 255, 255),
