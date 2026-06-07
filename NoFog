@@ -70,6 +70,15 @@ function NoFog:apply()
     Lighting.FogColor = Color3.new(1, 1, 1)
 end
 
+function NoFog:saveOriginal()
+    local Lighting = game:GetService("Lighting")
+    self._original = {
+        FogStart = Lighting.FogStart,
+        FogEnd = Lighting.FogEnd,
+        FogColor = Lighting.FogColor
+    }
+end
+
 function NoFog:restoreOriginal()
     local Lighting = game:GetService("Lighting")
     if not self._original then return end
