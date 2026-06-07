@@ -2,9 +2,43 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
-local Utils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService"))()
-local utils = Utils.new()
-local ConnectionManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager"))()
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("[PlayerESPHandler] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[PlayerESPHandler] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[PlayerESPHandler] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+local Utils = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService", "UtilsService")
+local utils = (Utils and Utils.new) and Utils.new() or nil
+if not utils then
+    warn("[PlayerESPHandler] UtilsService não foi carregado")
+end
+local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+    new = function()
+        return {
+            add = function() end,
+            disconnectAll = function() end
+        }
+    end
+}
 
 -- Cache global de objetos pesados
 local LocalPlayer = Players.LocalPlayer
