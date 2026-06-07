@@ -13,8 +13,35 @@ local ipairs = ipairs
 local pairs = pairs
 
 -- Carrega o módulo Utils
-local Utils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService"))()
-local utils = Utils.new()
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("[FFHandler] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
+
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[FFHandler] Failed to compile module:", name or url, tostring(err))
+        return nil
+    end
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[FFHandler] Failed to execute module:", name or url, tostring(module))
+        return nil
+    end
+
+    return module
+end
+
+local Utils = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService", "UtilsService")
+local utils = (Utils and Utils.new) and Utils.new() or nil
+if not utils then
+    warn("[FFHandler] UtilsService não foi carregado")
+end
 
 -- Constantes pré-calculadas
 local FF_DURATION = 120
@@ -22,10 +49,27 @@ local BILLBOARD_SIZE = UDim2.new(0, 80, 0, 24)
 local BILLBOARD_OFFSET = Vector3.new(0, 2.2, 0)
 local UPDATE_INTERVAL = 0.4 -- Aumentado para reduzir frequência e lag
 
-local ConnectionManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager"))()
+local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+    new = function()
+        return {
+            add = function() end,
+            disconnectAll = function() end
+        }
+    end
+}
 
--- Cache para evitar múltiplas buscas
-local adorneeCache = {}
+-- Helper: garante que o ForceField tem um StartTime definido
+local function ensureStartTime(ff)
+    local startTime = ff:GetAttribute("StartTime")
+    if not startTime then
+        startTime = getTime()
+        ff:SetAttribute("StartTime", startTime)
+    end
+    return startTime
+end
+
+-- Cache para evitar múltiplas buscas (weak keys para auto-limpeza de characters destruídos)
+local adorneeCache = setmetatable({}, {__mode = "k"})
 local function getBestAdornee(character)
     local cached = adorneeCache[character]
     if cached and cached.Parent then
@@ -56,11 +100,7 @@ function FFDetector.new()
     self.ffData = {}
     self.billboardMaxDistance = 125
     self.billboardTextSize = 18
-    
-    -- Cache para otimização
     self._lastUpdate = 0
-    self._playersCache = {}
-    self._dirtyBillboards = {} -- Marca billboards que precisam ser atualizados
     
     return self
 end
@@ -114,11 +154,13 @@ function FFDetector:createBillboard(character, ff, startTime)
         label.Parent = billboard
         billboard.Parent = character
     end
-    -- Atualiza label apenas se necessário
-    local timeLeft = self:getFFTimeLeft(Players:GetPlayerFromCharacter(character))
+    -- Calcula tempo restante diretamente a partir do startTime (evita GetPlayerFromCharacter)
+    local elapsed = getTime() - startTime
+    local timeLeft = mathMax(0, FF_DURATION - elapsed)
     local color = self:getFFColor(timeLeft)
-    if label.Text ~= stringFormat('%.1f s until FF is out', timeLeft) then
-        label.Text = stringFormat('%.1f s until FF is out', timeLeft)
+    local text = stringFormat('%.1f s until FF is out', timeLeft)
+    if label.Text ~= text then
+        label.Text = text
     end
     if label.TextColor3 ~= color then
         label.TextColor3 = color
@@ -151,7 +193,7 @@ end
 
 function FFDetector:removeForceFieldData(character, ff)
     if self._ffConnections[ff] then
-        self._ffConnections[ff]:Disconnect()
+        self._ffConnections[ff].conn:Disconnect()
         self._ffConnections[ff] = nil
     end
     
@@ -164,11 +206,7 @@ function FFDetector:removeForceFieldData(character, ff)
         for i = 1, #children do
             local child = children[i]
             if child:IsA('ForceField') and child ~= ff then
-                local startTime = child:GetAttribute("StartTime")
-                if not startTime then
-                    startTime = getTime()
-                    child:SetAttribute("StartTime", startTime)
-                end
+                local startTime = ensureStartTime(child)
                 self.ffData[character] = {ff = child, startTime = startTime}
                 self:createBillboard(character, child, startTime)
                 return
@@ -184,10 +222,10 @@ function FFDetector:clearCharacterData(character)
     self:removeBillboard(character)
     self.ffData[character] = nil
     
-    -- Limpa conexões relacionadas ao personagem
-    for ff, conn in pairs(self._ffConnections) do
-        if ff.Parent == character then
-            conn:Disconnect()
+    -- Limpa conexões por referência de character armazenada (não depende de ff.Parent)
+    for ff, data in pairs(self._ffConnections) do
+        if data.character == character then
+            data.conn:Disconnect()
             self._ffConnections[ff] = nil
         end
     end
@@ -200,31 +238,22 @@ function FFDetector:cleanup()
     end
     self._charConnMgrs = {}
     
-    for ff, conn in pairs(self._ffConnections) do
-        conn:Disconnect()
+    for ff, data in pairs(self._ffConnections) do
+        data.conn:Disconnect()
     end
     self._ffConnections = {}
     
     for character, _ in pairs(self.billboards) do
         self:removeBillboard(character)
     end
-    
-    -- Limpa caches
-    adorneeCache = {}
-    self._playersCache = {}
-    self._dirtyBillboards = {}
 end
 
 function FFDetector:onForceFieldAdded(character, ff)
-    local currentTime = getTime()
-    if not ff:GetAttribute("StartTime") then
-        ff:SetAttribute("StartTime", currentTime)
-    end
+    local startTime = ensureStartTime(ff)
     
     local ffData = self.ffData[character]
     if ffData and ffData.ff == ff then return end
     
-    local startTime = ff:GetAttribute("StartTime") or currentTime
     self.ffData[character] = {ff = ff, startTime = startTime}
     self:createBillboard(character, ff, startTime)
     
@@ -236,7 +265,7 @@ function FFDetector:onForceFieldAdded(character, ff)
             end
         end)
         charConnMgr:add(conn)
-        self._ffConnections[ff] = conn
+        self._ffConnections[ff] = {conn = conn, character = character}
     end
 end
 
@@ -252,16 +281,11 @@ function FFDetector:registerCharacterFF(character)
     
     -- Processamento otimizado dos ForceFields existentes
     local children = character:GetChildren()
-    local currentTime = getTime()
     
     for i = 1, #children do
         local child = children[i]
         if child:IsA('ForceField') then
-            local startTime = child:GetAttribute("StartTime")
-            if not startTime then
-                startTime = currentTime
-                child:SetAttribute("StartTime", startTime)
-            end
+            local startTime = ensureStartTime(child)
             
             if not self.ffData[character] then
                 self.ffData[character] = {ff = child, startTime = startTime}
@@ -275,18 +299,13 @@ function FFDetector:registerCharacterFF(character)
                 end
             end)
             mgr:add(conn)
-            self._ffConnections[child] = conn
+            self._ffConnections[child] = {conn = conn, character = character}
         end
     end
     
     -- Conexões de eventos
     mgr:add(character.ChildAdded:Connect(function(child)
         if child:IsA('ForceField') then
-            local startTime = child:GetAttribute("StartTime")
-            if not startTime then
-                startTime = getTime()
-                child:SetAttribute("StartTime", startTime)
-            end
             self:onForceFieldAdded(character, child)
         end
     end))
@@ -319,54 +338,33 @@ function FFDetector:updateBillboards()
         return 
     end
     self._lastUpdate = currentTime
-    -- Cache de players atualizado só em PlayerAdded/Removed
-    local players = Players:GetPlayers()
-    for i = 1, #players do
-        local player = players[i]
-        local character = player.Character
-        if character then
-            local ffData = self.ffData[character]
-            local ff = nil
-            -- Busca FF só se não estiver cacheado ou mudou
-            if not ffData or not ffData.ff or not ffData.ff.Parent then
-                local children = character:GetChildren()
-                for j = 1, #children do
-                    local child = children[j]
-                    if child:IsA('ForceField') then
-                        ff = child
-                        break
-                    end
-                end
-                if ff then
-                    local startTime = ff:GetAttribute("StartTime") or currentTime
-                    self.ffData[character] = {ff = ff, startTime = startTime}
-                    self:createBillboard(character, ff, startTime)
-                else
-                    if ffData then
-                        self:removeForceFieldData(character, ffData.ff)
-                    end
-                end
-            else
-                ff = ffData.ff
-                -- Só atualiza se FF ainda existe
-                if ff and ff.Parent == character then
-                    self:createBillboard(character, ff, ffData.startTime)
-                end
-            end
+    
+    -- Itera apenas sobre personagens com FF registrado (evita percorrer todos os jogadores)
+    local toRemove = {}
+    for character, ffData in pairs(self.ffData) do
+        local ff = ffData.ff
+        if ff and ff.Parent == character then
+            self:createBillboard(character, ff, ffData.startTime)
+        else
+            toRemove[#toRemove + 1] = character
         end
+    end
+    
+    -- Limpa FFs inválidos fora do loop de iteração
+    for i = 1, #toRemove do
+        local character = toRemove[i]
+        self:removeBillboard(character)
+        self.ffData[character] = nil
     end
 end
 
 function FFDetector:enable()
     self.enabled = true
     self:cleanup()
-    -- Registra players existentes
+    -- Registra players existentes (inclui CharacterAdded para respawns futuros)
     local players = Players:GetPlayers()
     for i = 1, #players do
-        local player = players[i]
-        if player.Character then
-            self:registerCharacterFF(player.Character)
-        end
+        self:registerPlayer(players[i])
     end
     -- Conexões de eventos
     self._connMgr:add(Players.PlayerAdded:Connect(function(player)
@@ -405,11 +403,7 @@ function FFDetector:getFFTimeLeft(player)
     local ff = player.Character:FindFirstChildOfClass("ForceField")
     if not ff then return 0 end
     
-    local startTime = ff:GetAttribute("StartTime")
-    if not startTime then
-        startTime = getTime()
-        ff:SetAttribute("StartTime", startTime)
-    end
+    local startTime = ensureStartTime(ff)
     
     local elapsed = getTime() - startTime
     return mathMax(0, FF_DURATION - elapsed)
