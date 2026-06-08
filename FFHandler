@@ -223,11 +223,19 @@ function FFDetector:clearCharacterData(character)
     self.ffData[character] = nil
     
     -- Limpa conexões por referência de character armazenada (não depende de ff.Parent)
+    local toDisconnect = {}
     for ff, data in pairs(self._ffConnections) do
         if data.character == character then
-            data.conn:Disconnect()
-            self._ffConnections[ff] = nil
+            table.insert(toDisconnect, ff)
         end
+    end
+    for i = 1, #toDisconnect do
+        local ff = toDisconnect[i]
+        local data = self._ffConnections[ff]
+        if data and data.conn then
+            data.conn:Disconnect()
+        end
+        self._ffConnections[ff] = nil
     end
 end
 
@@ -239,13 +247,21 @@ function FFDetector:cleanup()
     self._charConnMgrs = {}
     
     for ff, data in pairs(self._ffConnections) do
-        data.conn:Disconnect()
+        if data and data.conn then
+            data.conn:Disconnect()
+        end
     end
     self._ffConnections = {}
     
+    local charactersToClear = {}
     for character, _ in pairs(self.billboards) do
-        self:removeBillboard(character)
+        table.insert(charactersToClear, character)
     end
+    for i = 1, #charactersToClear do
+        self:removeBillboard(charactersToClear[i])
+    end
+    self.billboards = {}
+    self.ffData = {}
 end
 
 function FFDetector:onForceFieldAdded(character, ff)
@@ -359,6 +375,7 @@ function FFDetector:updateBillboards()
 end
 
 function FFDetector:enable()
+    if self.enabled then return end
     self.enabled = true
     self:cleanup()
     -- Registra players existentes (inclui CharacterAdded para respawns futuros)
