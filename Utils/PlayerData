@@ -175,6 +175,18 @@ function PlayerData:getEdictData(player)
     local edictDisplay = edictDisplayFromBackpack or edict
     local maxEdict = self:_getPlayerDataWithFallback(player, "MaxEdict", false)
 
+    -- If MaxEdict is true, force the player to the highest tier for their edict
+    if maxEdict then
+        local base = tostring(edict)
+        if string.find(base, "Healer") then
+            edictDisplay = "Healer T3"
+        elseif string.find(base, "Seer") then
+            edictDisplay = "Seer T3"
+        elseif string.find(base, "Blademaster") then
+            edictDisplay = "Blademaster T2"
+        end
+    end
+
     return {
         edict        = edict,
         edictDisplay = edictDisplay,
