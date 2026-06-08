@@ -368,14 +368,218 @@ local ThemeManager = {
     SetFolder = function() end,
     ApplyToTab = function() end,
 }
+local function safeWriteFile(path, content)
+    local ok, err = pcall(function()
+        if writefile then
+            local parts = string.split(path, "/")
+            local current = ""
+            for i = 1, #parts - 1 do
+                current = current == "" and parts[i] or current .. "/" .. parts[i]
+                if makefolder and isfolder and not isfolder(current) then
+                    makefolder(current)
+                end
+            end
+            writefile(path, content)
+        end
+    end)
+    return ok, err
+end
+
+local function safeReadFile(path)
+    if readfile then
+        local ok, content = pcall(readfile, path)
+        if ok then return content end
+    end
+    return nil
+end
+
+local function safeIsFile(path)
+    if isfile then
+        local ok, exists = pcall(isfile, path)
+        return ok and exists
+    end
+    return false
+end
+
 local SaveManager = {
-    SetLibrary = function() end,
-    IgnoreThemeSettings = function() end,
-    SetIgnoreIndexes = function() end,
-    SetFolder = function() end,
-    BuildConfigSection = function() end,
-    LoadAutoloadConfig = function() end,
+    Library = nil,
+    Folder = "BrazilHub/Rogue-Lineage",
+    IgnoreIndexes = {},
+    AutoloadFile = "BrazilHub/Rogue-Lineage/autoload.txt",
 }
+
+function SaveManager:SetLibrary(lib)
+    self.Library = lib
+end
+
+function SaveManager:IgnoreThemeSettings()
+end
+
+function SaveManager:SetIgnoreIndexes(list)
+    self.IgnoreIndexes = {}
+    for _, idx in ipairs(list) do
+        self.IgnoreIndexes[idx] = true
+    end
+end
+
+function SaveManager:SetFolder(folder)
+    self.Folder = folder
+    self.AutoloadFile = folder .. "/autoload.txt"
+end
+
+function SaveManager:Save(name)
+    if not name or name == "" then return false end
+    local filePath = self.Folder .. "/configs/" .. name .. ".json"
+    
+    local data = {
+        Toggles = {},
+        Options = {}
+    }
+    
+    for id, toggle in pairs(getgenv().Toggles) do
+        if not self.IgnoreIndexes[id] then
+            data.Toggles[id] = toggle.Value
+        end
+    end
+    
+    for id, option in pairs(getgenv().Options) do
+        if not self.IgnoreIndexes[id] then
+            local val = option.Value
+            if typeof(val) == "EnumItem" then
+                data.Options[id] = { Type = "Keybind", Value = val.Name }
+            elseif typeof(val) == "Color3" then
+                data.Options[id] = { Type = "Color", Value = { val.R, val.G, val.B } }
+            elseif type(val) == "table" and option.Values then
+                data.Options[id] = { Type = "Dropdown", Value = val }
+            else
+                data.Options[id] = { Type = "Value", Value = val }
+            end
+        end
+    end
+    
+    local HttpService = game:GetService("HttpService")
+    local jsonStr = HttpService:JSONEncode(data)
+    local ok, err = safeWriteFile(filePath, jsonStr)
+    if not ok then
+        warn("[SaveManager] Error saving config:", tostring(err))
+    end
+    return ok
+end
+
+function SaveManager:Load(name)
+    if not name or name == "" then return false end
+    local filePath = self.Folder .. "/configs/" .. name .. ".json"
+    if not safeIsFile(filePath) then return false end
+    
+    local content = safeReadFile(filePath)
+    if not content then return false end
+    
+    local HttpService = game:GetService("HttpService")
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, content)
+    if not ok or type(data) ~= "table" then return false end
+    
+    if data.Toggles then
+        for id, state in pairs(data.Toggles) do
+            local toggle = getgenv().Toggles[id]
+            if toggle and not self.IgnoreIndexes[id] then
+                pcall(function() toggle:SetValue(state) end)
+            end
+        end
+    end
+    
+    if data.Options then
+        for id, optData in pairs(data.Options) do
+            local option = getgenv().Options[id]
+            if option and not self.IgnoreIndexes[id] then
+                pcall(function()
+                    if type(optData) == "table" and optData.Type then
+                        if optData.Type == "Keybind" then
+                            local key = Enum.KeyCode[optData.Value]
+                            if key then option:SetValue(key) end
+                        elseif optData.Type == "Color" then
+                            local rgb = optData.Value
+                            local color = Color3.new(rgb[1], rgb[2], rgb[3])
+                            option:SetValue(color)
+                        elseif optData.Type == "Dropdown" then
+                            option:SetValue(optData.Value)
+                        else
+                            option:SetValue(optData.Value)
+                        end
+                    else
+                        option:SetValue(optData)
+                    end
+                end)
+            end
+        end
+    end
+    
+    return true
+end
+
+function SaveManager:LoadAutoloadConfig()
+    if safeIsFile(self.AutoloadFile) then
+        local name = safeReadFile(self.AutoloadFile)
+        if name and name ~= "" then
+            self:Load(name)
+        end
+    end
+end
+
+function SaveManager:BuildConfigSection(tab)
+    local configGroup = tab:AddRightGroupbox('Configurations')
+    
+    local slots = {"Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5"}
+    local selectedSlot = "Slot 1"
+    
+    configGroup:AddDropdown('SelectedConfigSlot', {
+        Values = slots,
+        Default = "Slot 1",
+        Text = 'Select Config Slot',
+        Callback = function(val)
+            selectedSlot = val
+        end
+    })
+    
+    configGroup:AddButton('Save Config', function()
+        if self:Save(selectedSlot) then
+            print("[SaveManager] Config saved to " .. selectedSlot)
+        else
+            warn("[SaveManager] Failed to save config " .. selectedSlot)
+        end
+    end)
+    
+    configGroup:AddButton('Load Config', function()
+        if self:Load(selectedSlot) then
+            print("[SaveManager] Config loaded from " .. selectedSlot)
+        else
+            warn("[SaveManager] Failed to load config " .. selectedSlot)
+        end
+    end)
+    
+    configGroup:AddToggle('AutoloadConfig', {
+        Text = 'Autoload Selected Slot',
+        Default = false,
+        Callback = function(state)
+            if state then
+                safeWriteFile(self.AutoloadFile, selectedSlot)
+            else
+                safeWriteFile(self.AutoloadFile, "")
+            end
+        end
+    })
+    
+    task.spawn(function()
+        if safeIsFile(self.AutoloadFile) then
+            local currentAutoload = safeReadFile(self.AutoloadFile)
+            if currentAutoload and currentAutoload ~= "" then
+                local toggle = getgenv().Toggles['AutoloadConfig']
+                if toggle then
+                    toggle:SetValue(true)
+                end
+            end
+        end
+    end)
+end
 
 local function safeRequire(url)
     return safeRequireRemote(url)
