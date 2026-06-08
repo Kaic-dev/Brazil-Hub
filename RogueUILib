@@ -280,6 +280,7 @@ function RogueUI:CreateWindow(options)
         Tabs = {},
         ActiveTab = nil,
         ToggleKeybind = { Value = toggleKey },
+        CleanupConnections = {},
     }
     
     -- Toggle visibility with keybind
@@ -791,6 +792,7 @@ function RogueUI:CreateWindow(options)
                 menuScroll.ScrollBarThickness = 3
                 menuScroll.ScrollBarImageColor3 = RogueUI.Theme.BorderColor
                 menuScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+                menuScroll.ZIndex = 100
                 menuScroll.Parent = menu
                 
                 local menuLayout = Instance.new("UIListLayout")
@@ -829,10 +831,30 @@ function RogueUI:CreateWindow(options)
                 end
                 
                 local open = false
+                local positionConnection
+                
+                local function closeDropdown()
+                    open = false
+                    menu.Visible = false
+                    buttonBorder.Color = RogueUI.Theme.BorderInactive
+                    if positionConnection then
+                        positionConnection:Disconnect()
+                        positionConnection = nil
+                    end
+                end
+                
+                table.insert(self_Window.CleanupConnections, closeDropdown)
+                
                 local function toggleMenu()
                     open = not open
                     if open then
                         positionMenu()
+                        positionConnection = RunService.Heartbeat:Connect(positionMenu)
+                    else
+                        if positionConnection then
+                            positionConnection:Disconnect()
+                            positionConnection = nil
+                        end
                     end
                     menu.Visible = open
                     buttonBorder.Color = open and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
@@ -858,9 +880,7 @@ function RogueUI:CreateWindow(options)
                                     and mousePos.Y >= btnPos.Y and mousePos.Y <= btnPos.Y + btnSize.Y
                                 
                                 if not inMenu and not inBtn then
-                                    open = false
-                                    menu.Visible = false
-                                    buttonBorder.Color = RogueUI.Theme.BorderInactive
+                                    closeDropdown()
                                 end
                             end
                         end)
@@ -914,7 +934,7 @@ function RogueUI:CreateWindow(options)
                                 selectedState = {}
                                 selectedState[optVal] = true
                                 button.Text = tostring(optVal)
-                                toggleMenu()
+                                closeDropdown()
                                 populateOptions()
                                 
                                 dropdownData.Value = optVal
@@ -976,9 +996,14 @@ function RogueUI:CreateWindow(options)
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = content
                 
+                local function calculateHeight(txt)
+                    local _, linesCount = string.gsub(txt, "\n", "")
+                    linesCount = linesCount + 1
+                    return linesCount * 17
+                end
+                
                 if isMultiLine then
-                    label.Size = UDim2.new(1, 0, 0, 0)
-                    label.AutomaticSize = Enum.AutomaticSize.Y
+                    label.Size = UDim2.new(1, 0, 0, calculateHeight(text))
                     label.TextWrapped = true
                     label.TextYAlignment = Enum.TextYAlignment.Top
                     label.RichText = true
@@ -990,11 +1015,18 @@ function RogueUI:CreateWindow(options)
                 local label_Self = {}
                 function label_Self:SetText(newText)
                     label.Text = newText
+                    if isMultiLine then
+                        label.Size = UDim2.new(1, 0, 0, calculateHeight(newText))
+                    end
                 end
                 function label_Self:AddKeyPicker(id, options)
                     local defaultKey = options.Default or "Insert"
-                    local keyData = { Value = Enum.KeyCode[defaultKey] or defaultKey, OnChangedCallbacks = {} }
+                    local keyData = { Value = typeof(defaultKey) == "EnumItem" and defaultKey or (Enum.KeyCode[defaultKey] or defaultKey), OnChangedCallbacks = {} }
                     getgenv().Options[id] = keyData
+                    
+                    if id == "MenuKeybind" and self_Window then
+                        self_Window.ToggleKeybind = keyData
+                    end
                     
                     local pickerBtn = Instance.new("TextButton")
                     pickerBtn.Name = id .. "KeyPicker"
@@ -1244,6 +1276,13 @@ function RogueUI:CreateWindow(options)
         if self_Window.OnUnload then
             local ok, err = pcall(self_Window.OnUnload)
             if not ok then warn("[RogueUI] Error in OnUnload:", tostring(err)) end
+        end
+        for _, conn in ipairs(self_Window.CleanupConnections) do
+            if type(conn) == "function" then
+                pcall(conn)
+            elseif conn.Disconnect then
+                pcall(function() conn:Disconnect() end)
+            end
         end
         if screenGui then
             screenGui:Destroy()
