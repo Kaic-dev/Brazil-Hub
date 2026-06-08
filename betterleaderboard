@@ -458,6 +458,7 @@ function BetterLeaderboard:_startRogueNameLoading(playerLabel, player)
             if display and #display > 0 then
                 playerLabel:SetAttribute("RogueDisplay", display)
                 playerLabel.Text = display
+                self:_updateAllLabelsColor()
                 break
             end
             task.wait(CONFIG.RETRY_INTERVAL)
@@ -580,7 +581,58 @@ function BetterLeaderboard:addPlayerFrame(player)
     -- Ensure ordering: prestige (1), indicator (2), label (3)
     observedIndicator.LayoutOrder = 2
     playerLabel.LayoutOrder = 3
-    
+
+    -- Extra listeners: attribute and backpack changes to refresh colors/indicator
+    local extraConns = {}
+    local ok, attrSignal = pcall(function() return player:GetAttributeChangedSignal("MaxEdict") end)
+    if ok and attrSignal then
+        local attrConn = attrSignal:Connect(function()
+            self:_updateAllLabelsColor()
+        end)
+        table.insert(extraConns, attrConn)
+    end
+
+    local backpackAddConn, backpackRemConn, bpAttachConn
+    if player.Backpack then
+        backpackAddConn = player.Backpack.ChildAdded:Connect(function()
+            self:_updateAllLabelsColor()
+        end)
+        backpackRemConn = player.Backpack.ChildRemoved:Connect(function()
+            self:_updateAllLabelsColor()
+        end)
+        table.insert(extraConns, backpackAddConn)
+        table.insert(extraConns, backpackRemConn)
+    else
+        bpAttachConn = player.ChildAdded:Connect(function(child)
+            if child and child.Name == "Backpack" then
+                backpackAddConn = child.ChildAdded:Connect(function()
+                    self:_updateAllLabelsColor()
+                end)
+                backpackRemConn = child.ChildRemoved:Connect(function()
+                    self:_updateAllLabelsColor()
+                end)
+                table.insert(extraConns, backpackAddConn)
+                table.insert(extraConns, backpackRemConn)
+                if bpAttachConn then
+                    bpAttachConn:Disconnect()
+                end
+            end
+        end)
+        table.insert(extraConns, bpAttachConn)
+    end
+
+    -- register conns with ConnectionManager and store for cleanup
+    for _, c in ipairs(extraConns) do
+        if c then
+            pcall(function() self._connMgr:add(c) end)
+        end
+    end
+    local conns = self._playerLabelConns[player] or {}
+    for _, c in ipairs(extraConns) do
+        if c then table.insert(conns, c) end
+    end
+    self._playerLabelConns[player] = conns
+
     -- Start async loading if rogue name is not available
     if not rogueName then
         self:_startRogueNameLoading(playerLabel, player)
