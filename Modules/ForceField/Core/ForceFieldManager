@@ -13,6 +13,15 @@ local ConnectionManager = loadstring(game:HttpGet('https://raw.githubusercontent
 -- Utilitários
 local getTime = tick
 
+local function ensureStartTime(ff)
+	local startTime = ff:GetAttribute("StartTime")
+	if not startTime then
+		startTime = getTime()
+		ff:SetAttribute("StartTime", startTime)
+	end
+	return startTime
+end
+
 local FFDetector = {}
 FFDetector.__index = FFDetector
 
@@ -32,6 +41,8 @@ function FFDetector.new()
 end
 
 function FFDetector:removeForceFieldData(character, ff)
+	if not self._charConnMgrs[character] then return end
+
 	local trackedFF = self._ffTracker:find(character)
 	if trackedFF == ff then
 		self._ffTracker:remove(character, ff)
@@ -39,9 +50,9 @@ function FFDetector:removeForceFieldData(character, ff)
 		-- Busca por outro FF no personagem
 		for _, child in ipairs(character:GetChildren()) do
 			if child:IsA("ForceField") and child ~= ff then
+				local startTime = ensureStartTime(child)
 				self._ffTracker:set(character, child)
-				local timeLeft = self._ffTracker:getFFTimeLeft(Players:GetPlayerFromCharacter(character))
-				self._billboardRenderer:create(character, child, timeLeft)
+				self._billboardRenderer:create(character, child, startTime)
 
 				-- Reconectar monitoramento
 				local charMgr = self._charConnMgrs[character]
@@ -83,17 +94,13 @@ function FFDetector:cleanup()
 end
 
 function FFDetector:onForceFieldAdded(character, ff)
-	local currentTime = getTime()
-	if not ff:GetAttribute("StartTime") then
-		ff:SetAttribute("StartTime", currentTime)
-	end
+	local startTime = ensureStartTime(ff)
 
 	local currentFF = self._ffTracker:find(character)
 	if currentFF == ff then return end
 
 	self._ffTracker:set(character, ff)
-	local timeLeft = self._ffTracker:getFFTimeLeft(Players:GetPlayerFromCharacter(character))
-	self._billboardRenderer:create(character, ff, timeLeft)
+	self._billboardRenderer:create(character, ff, startTime)
 
 	local charMgr = self._charConnMgrs[character]
 	if charMgr then
@@ -108,8 +115,6 @@ function FFDetector:registerCharacterFF(character)
 	local manager = CharacterConnections.new(character)
 	manager:setHandlers({
 		onFFAdded = function(ff)
-			local startTime = ff:GetAttribute("StartTime") or getTime()
-			ff:SetAttribute("StartTime", startTime)
 			self:onForceFieldAdded(character, ff)
 		end,
 
@@ -125,18 +130,15 @@ function FFDetector:registerCharacterFF(character)
 	self._charConnMgrs[character] = manager
 
 	-- Força leitura inicial dos FFs já existentes
-	local currentTime = getTime()
 	for _, child in ipairs(character:GetChildren()) do
 		if child:IsA("ForceField") then
-			local startTime = child:GetAttribute("StartTime") or currentTime
-			child:SetAttribute("StartTime", startTime)
+			local startTime = ensureStartTime(child)
 
 			if not self._ffTracker:exists(character) then
 				self._ffTracker:set(character, child)
 			end
 
-			local timeLeft = self._ffTracker:getFFTimeLeft(Players:GetPlayerFromCharacter(character))
-			self._billboardRenderer:create(character, child, timeLeft)
+			self._billboardRenderer:create(character, child, startTime)
 
 			manager:trackFF(child)
 		end
@@ -162,28 +164,27 @@ function FFDetector:updateBillboards()
 	if currentTime - self._lastUpdate < Config.FF.UpdateInterval then return end
 	self._lastUpdate = currentTime
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		if character then
-			local ff = character:FindFirstChildOfClass("ForceField")
+	local toRemove = {}
+	for character, ffData in pairs(self._ffTracker:getAll()) do
+		local ff = ffData.ff
+		if ff and ff.Parent == character then
+			self._billboardRenderer:create(character, ff, ffData.startTime)
+		else
+			toRemove[#toRemove + 1] = character
+		end
+	end
 
-			if ff and ff.Parent == character then
-				if not self._ffTracker:exists(character) then
-					self._ffTracker:set(character, ff)
-				end
-				local timeLeft = self._ffTracker:getFFTimeLeft(player)
-				self._billboardRenderer:create(character, ff, timeLeft)
-			else
-				local trackedFF = self._ffTracker:find(character)
-				if trackedFF then
-					self:removeForceFieldData(character, trackedFF)
-				end
-			end
+	for i = 1, #toRemove do
+		local character = toRemove[i]
+		local trackedFF = self._ffTracker:find(character)
+		if trackedFF then
+			self:removeForceFieldData(character, trackedFF)
 		end
 	end
 end
 
 function FFDetector:enable()
+	if self.enabled then return end
 	self.enabled = true
 	self:cleanup()
 
@@ -207,8 +208,18 @@ function FFDetector:enable()
 end
 
 function FFDetector:disable()
+	if not self.enabled then return end
 	self.enabled = false
 	self:cleanup()
+end
+
+-- Métodos públicos para compatibilidade e controle externo
+function FFDetector:setBillboardMaxDistance(value)
+	self._billboardRenderer:setMaxDistance(value)
+end
+
+function FFDetector:setBillboardTextSize(value)
+	self._billboardRenderer:setTextSize(value)
 end
 
 return FFDetector
