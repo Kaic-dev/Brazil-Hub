@@ -542,15 +542,37 @@ function BetterLeaderboard:addPlayerFrame(player)
     -- Create UI elements
     local prestigeButton = self:_createPrestigeButton(prestige, playerFrame)
 
-    -- Observed indicator (small square matching Rogue Lineage style)
+    -- Observed indicator (Rogue Lineage inspired eye: outer ring + pupil)
     local observedIndicator = Instance.new("Frame")
     observedIndicator.Name = "ObservedIndicator"
-    observedIndicator.Size = UDim2.new(0, 12, 0, 12)
-    observedIndicator.BackgroundColor3 = CONFIG.COLORS.OBSERVED
+    observedIndicator.Size = UDim2.new(0, 14, 0, 14)
+    observedIndicator.BackgroundTransparency = 1
     observedIndicator.BorderSizePixel = 0
-    local observedCorner = Instance.new("UICorner")
-    observedCorner.CornerRadius = UDim.new(0, 2)
-    observedCorner.Parent = observedIndicator
+
+    -- outer ring
+    local outer = Instance.new("Frame")
+    outer.Name = "OuterRing"
+    outer.Size = UDim2.new(1, 0, 1, 0)
+    outer.Position = UDim2.new(0, 0, 0, 0)
+    outer.BackgroundColor3 = CONFIG.COLORS.OBSERVED
+    outer.BorderSizePixel = 0
+    outer.Parent = observedIndicator
+    local outerCorner = Instance.new("UICorner")
+    outerCorner.CornerRadius = UDim.new(1, 0)
+    outerCorner.Parent = outer
+
+    -- pupil
+    local pupil = Instance.new("Frame")
+    pupil.Name = "Pupil"
+    pupil.Size = UDim2.new(0, 8, 0, 8)
+    pupil.Position = UDim2.new(0.5, -4, 0.5, -4)
+    pupil.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    pupil.BorderSizePixel = 0
+    pupil.Parent = observedIndicator
+    local pupilCorner = Instance.new("UICorner")
+    pupilCorner.CornerRadius = UDim.new(1, 0)
+    pupilCorner.Parent = pupil
+
     observedIndicator.Visible = (self._currentCameraTarget == player)
     observedIndicator.Parent = playerFrame
 
