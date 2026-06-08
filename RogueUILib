@@ -124,8 +124,8 @@ function RogueUI:CreateWindow(options)
     -- Main Frame
     local mainWindow = Instance.new("Frame")
     mainWindow.Name = "MainWindow"
-    mainWindow.Size = UDim2.new(0, 550, 0, 400)
-    mainWindow.Position = UDim2.new(0.5, -275, 0.5, -200)
+    mainWindow.Size = UDim2.new(0, 570, 0, 420)
+    mainWindow.Position = UDim2.new(0.5, -285, 0.5, -210)
     mainWindow.BackgroundColor3 = self.Theme.MainBackground
     mainWindow.BorderSizePixel = 0
     mainWindow.Active = true
@@ -167,7 +167,7 @@ function RogueUI:CreateWindow(options)
     
     local title = Instance.new("TextLabel")
     title.Name = "Title"
-    title.Size = UDim2.new(1, -40, 1, 0)
+    title.Size = UDim2.new(1, -80, 1, 0)
     title.Position = UDim2.new(0, 12, 0, 0)
     title.BackgroundTransparency = 1
     title.Text = titleText
@@ -177,6 +177,7 @@ function RogueUI:CreateWindow(options)
     title.TextXAlignment = Enum.TextXAlignment.Left
     title.Parent = header
     
+    -- Close button
     local closeBtn = Instance.new("TextButton")
     closeBtn.Name = "Close"
     closeBtn.Size = UDim2.new(0, 32, 0, 32)
@@ -199,9 +200,7 @@ function RogueUI:CreateWindow(options)
         screenGui.Enabled = false
     end)
     
-    makeDraggable(mainWindow, header)
-    
-    -- Tab Container
+    -- Tab Container (defined here for minimize reference)
     local tabContainer = Instance.new("Frame")
     tabContainer.Name = "TabContainer"
     tabContainer.Size = UDim2.new(0, 120, 1, -32)
@@ -209,6 +208,52 @@ function RogueUI:CreateWindow(options)
     tabContainer.BackgroundColor3 = self.Theme.HeaderBackground
     tabContainer.BorderSizePixel = 0
     tabContainer.Parent = mainWindow
+    
+    -- Pages Container (defined here for minimize reference)
+    local pages = Instance.new("Frame")
+    pages.Name = "Pages"
+    pages.Size = UDim2.new(1, -120, 1, -32)
+    pages.Position = UDim2.new(0, 120, 0, 32)
+    pages.BackgroundTransparency = 1
+    pages.Parent = mainWindow
+
+    -- Minimize button
+    local minBtn = Instance.new("TextButton")
+    minBtn.Name = "Minimize"
+    minBtn.Size = UDim2.new(0, 32, 0, 32)
+    minBtn.Position = UDim2.new(1, -64, 0, 0)
+    minBtn.BackgroundTransparency = 1
+    minBtn.Text = "-"
+    minBtn.TextColor3 = self.Theme.TextNormal
+    minBtn.Font = Enum.Font.Garamond
+    minBtn.TextSize = 18
+    minBtn.Parent = header
+    
+    local isMinimized = false
+    minBtn.MouseEnter:Connect(function()
+        minBtn.TextColor3 = self.Theme.TextActive
+        playHover()
+    end)
+    minBtn.MouseLeave:Connect(function()
+        minBtn.TextColor3 = self.Theme.TextNormal
+    end)
+    minBtn.MouseButton1Click:Connect(function()
+        playClick()
+        isMinimized = not isMinimized
+        if isMinimized then
+            mainWindow.Size = UDim2.new(0, 570, 0, 32)
+            tabContainer.Visible = false
+            pages.Visible = false
+            minBtn.Text = "+"
+        else
+            mainWindow.Size = UDim2.new(0, 570, 0, 420)
+            tabContainer.Visible = true
+            pages.Visible = true
+            minBtn.Text = "-"
+        end
+    end)
+    
+    makeDraggable(mainWindow, header)
     
     local tabLine = Instance.new("Frame")
     tabLine.Name = "Line"
@@ -222,14 +267,6 @@ function RogueUI:CreateWindow(options)
     tabList.SortOrder = Enum.SortOrder.LayoutOrder
     tabList.Padding = UDim.new(0, 1)
     tabList.Parent = tabContainer
-    
-    -- Pages Container
-    local pages = Instance.new("Frame")
-    pages.Name = "Pages"
-    pages.Size = UDim2.new(1, -120, 1, -32)
-    pages.Position = UDim2.new(0, 120, 0, 32)
-    pages.BackgroundTransparency = 1
-    pages.Parent = mainWindow
     
     local self_Window = {
         Gui = screenGui,
@@ -396,7 +433,7 @@ function RogueUI:CreateWindow(options)
             titleLabel.Text = groupTitle
             titleLabel.TextColor3 = RogueUI.Theme.TextActive
             titleLabel.Font = Enum.Font.Garamond
-            titleLabel.TextSize = 14
+            titleLabel.TextSize = 15
             titleLabel.TextXAlignment = Enum.TextXAlignment.Left
             titleLabel.Parent = groupFrame
             
@@ -428,7 +465,7 @@ function RogueUI:CreateWindow(options)
             contentPadding.Parent = content
             
             contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
-                local height = contentLayout.AbsoluteContentSize.Y + 32
+                local height = contentLayout.AbsoluteContentSize.Y + 38
                 groupFrame.Size = UDim2.new(1, 0, 0, height)
             end)
             
@@ -479,7 +516,8 @@ function RogueUI:CreateWindow(options)
                 label.Text = text
                 label.TextColor3 = default and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
-                label.TextSize = 14
+                label.TextSize = 15
+                label.TextTruncate = Enum.TextTruncate.AtEnd
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = toggleFrame
                 
@@ -549,7 +587,8 @@ function RogueUI:CreateWindow(options)
                 label.Text = text .. ": " .. tostring(default)
                 label.TextColor3 = RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
-                label.TextSize = 14
+                label.TextSize = 15
+                label.TextTruncate = Enum.TextTruncate.AtEnd
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = sliderFrame
                 
@@ -665,7 +704,8 @@ function RogueUI:CreateWindow(options)
                 label.Text = text
                 label.TextColor3 = RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
-                label.TextSize = 14
+                label.TextSize = 15
+                label.TextTruncate = Enum.TextTruncate.AtEnd
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = dropdownFrame
                 
@@ -712,7 +752,8 @@ function RogueUI:CreateWindow(options)
                 button.Text = getDisplayText()
                 button.TextColor3 = RogueUI.Theme.TextActive
                 button.Font = Enum.Font.Garamond
-                button.TextSize = 14
+                button.TextSize = 15
+                button.TextTruncate = Enum.TextTruncate.AtEnd
                 button.BorderSizePixel = 0
                 button.Parent = dropdownFrame
                 
@@ -794,7 +835,8 @@ function RogueUI:CreateWindow(options)
                         opt.Text = tostring(optVal)
                         opt.TextColor3 = selectedState[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
                         opt.Font = Enum.Font.Garamond
-                        opt.TextSize = 14
+                        opt.TextSize = 15
+                        opt.TextTruncate = Enum.TextTruncate.AtEnd
                         opt.ZIndex = 101
                         opt.Parent = menu
                         
@@ -883,7 +925,8 @@ function RogueUI:CreateWindow(options)
                 label.Text = text
                 label.TextColor3 = RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
-                label.TextSize = 14
+                label.TextSize = 15
+                label.TextTruncate = Enum.TextTruncate.AtEnd
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = content
                 
@@ -893,8 +936,77 @@ function RogueUI:CreateWindow(options)
                 end
                 function label_Self:AddKeyPicker(id, options)
                     local defaultKey = options.Default or "Insert"
-                    local keyData = { Value = Enum.KeyCode[defaultKey] or defaultKey }
+                    local keyData = { Value = Enum.KeyCode[defaultKey] or defaultKey, OnChangedCallbacks = {} }
                     getgenv().Options[id] = keyData
+                    
+                    local pickerBtn = Instance.new("TextButton")
+                    pickerBtn.Name = id .. "KeyPicker"
+                    pickerBtn.Size = UDim2.new(0, 60, 0, 14)
+                    pickerBtn.Position = UDim2.new(1, -2, 0.5, 0)
+                    pickerBtn.AnchorPoint = Vector2.new(1, 0.5)
+                    pickerBtn.BackgroundColor3 = RogueUI.Theme.MainBackground
+                    pickerBtn.BorderSizePixel = 0
+                    local keyName = typeof(keyData.Value) == "EnumItem" and keyData.Value.Name or tostring(keyData.Value)
+                    pickerBtn.Text = "[" .. keyName .. "]"
+                    pickerBtn.TextColor3 = RogueUI.Theme.TextActive
+                    pickerBtn.Font = Enum.Font.Garamond
+                    pickerBtn.TextSize = 13
+                    pickerBtn.Parent = label
+                    
+                    local pickerBorder = Instance.new("UIStroke")
+                    pickerBorder.Thickness = 1
+                    pickerBorder.Color = RogueUI.Theme.BorderInactive
+                    pickerBorder.Parent = pickerBtn
+                    
+                    local listening = false
+                    local conn
+                    
+                    local function stopListening(newKey)
+                        listening = false
+                        pickerBtn.Text = "[" .. tostring(newKey.Name) .. "]"
+                        pickerBtn.TextColor3 = RogueUI.Theme.TextActive
+                        pickerBorder.Color = RogueUI.Theme.BorderInactive
+                        
+                        keyData.Value = newKey
+                        
+                        if conn then conn:Disconnect() conn = nil end
+                        
+                        -- Update main toggle if it is MenuKeybind
+                        if id == "MenuKeybind" and self_Window then
+                            self_Window.ToggleKeybind = keyData
+                        end
+                        
+                        if options.Callback then
+                            task.spawn(options.Callback, newKey)
+                        end
+                        for _, cb in ipairs(keyData.OnChangedCallbacks) do
+                            task.spawn(cb, newKey)
+                        end
+                    end
+                    
+                    pickerBtn.MouseButton1Click:Connect(function()
+                        if listening then return end
+                        playClick()
+                        listening = true
+                        pickerBtn.Text = "[...]"
+                        pickerBtn.TextColor3 = RogueUI.Theme.TextNormal
+                        pickerBorder.Color = RogueUI.Theme.BorderColor
+                        
+                        conn = UserInputService.InputBegan:Connect(function(input)
+                            if input.UserInputType == Enum.UserInputType.Keyboard then
+                                stopListening(input.KeyCode)
+                            end
+                        end)
+                    end)
+                    
+                    function keyData:SetValue(newKey)
+                        stopListening(newKey)
+                    end
+                    
+                    function keyData:OnChanged(cb)
+                        table.insert(keyData.OnChangedCallbacks, cb)
+                    end
+                    
                     return keyData
                 end
                 function label_Self:AddColorPicker(id, options)
@@ -1029,7 +1141,8 @@ function RogueUI:CreateWindow(options)
                 btn.Text = text
                 btn.TextColor3 = RogueUI.Theme.TextNormal
                 btn.Font = Enum.Font.Garamond
-                btn.TextSize = 14
+                btn.TextSize = 15
+                btn.TextTruncate = Enum.TextTruncate.AtEnd
                 btn.Parent = content
                 
                 local btnBorder = Instance.new("UIStroke")
