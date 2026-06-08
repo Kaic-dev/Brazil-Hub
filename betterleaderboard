@@ -96,6 +96,7 @@ local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/K
     new = function()
         return {
             add = function() end,
+            remove = function() end,
             disconnectAll = function() end
         }
     end
