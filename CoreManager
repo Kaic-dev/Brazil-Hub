@@ -117,8 +117,8 @@ if Drawing and Drawing.new then
     end
 end
 
--- Carrega LinoriaLib
-local Library = safeRequireRemote(REPO_BASE_URL .. 'Library.lua', 'Library')
+-- Carrega RogueUILib (Estilo Rogue Lineage)
+local Library = safeRequireRemote(BRAZIL_HUB_BASE_URL .. 'RogueUILib', 'RogueUILib')
 
 -- Carrega e executa o sistema de key
 local KeyHandler = safeRequireRemote(BRAZIL_HUB_BASE_URL .. 'KeyHandler', 'KeyHandler')
@@ -129,9 +129,20 @@ else
     warn("[BrazilHub] KeyHandler não carregado")
 end
 
--- Load LinoriaLib components
-local ThemeManager = safeRequireRemote(REPO_BASE_URL .. 'addons/ThemeManager.lua', 'ThemeManager')
-local SaveManager = safeRequireRemote(REPO_BASE_URL .. 'addons/SaveManager.lua', 'SaveManager')
+-- Mocks do ThemeManager e SaveManager para compatibilidade
+local ThemeManager = {
+    SetLibrary = function() end,
+    SetFolder = function() end,
+    ApplyToTab = function() end,
+}
+local SaveManager = {
+    SetLibrary = function() end,
+    IgnoreThemeSettings = function() end,
+    SetIgnoreIndexes = function() end,
+    SetFolder = function() end,
+    BuildConfigSection = function() end,
+    LoadAutoloadConfig = function() end,
+}
 
 local function safeRequire(url)
     return safeRequireRemote(url)
