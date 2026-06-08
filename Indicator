@@ -77,7 +77,8 @@ function IndicatorController._createDamageLabel()
 	part.Transparency = 1
 	part.Name = "DamageLabel"
 	part.CanCollide = false
-	part.Anchored = true -- Use anchored parts and tween CFrame for reliable client/server behavior
+	part.Anchored = false -- Use physics motion for the damage/healing UI effect
+	part.Massless = true
 	part.BottomSurface = Enum.SurfaceType.Smooth
 	part.TopSurface = Enum.SurfaceType.Smooth
 
@@ -142,10 +143,58 @@ function IndicatorController.new()
 	local self = setmetatable({}, IndicatorController)
 	self._connections = {}    -- Store all RBXScriptConnections
 	self._instances = {}      -- Store character tracking instances
+	self._labelPool = {}      -- Reuse indicator parts to reduce memory churn
 	self._enabled = false     -- System enabled state
 	self.showDamage = true    -- Show damage indicators
 	self.showHeal = true      -- Show heal indicators
 	return self
+end
+
+function IndicatorController:_acquireLabel()
+	local label = table.remove(self._labelPool)
+	if label and label:IsA("BasePart") then
+		label.Velocity = Vector3.new(0, 0, 0)
+		label.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+		label.CFrame = CFrame.new(0, 0, 0)
+		label.Parent = nil
+		local billboard = label:FindFirstChild("BillboardGui")
+		if billboard then
+			local shadow = billboard:FindFirstChild("Shadow")
+			local theShadow = billboard:FindFirstChild("TheShadow")
+			if shadow then shadow.TextTransparency = 0 end
+			if theShadow then theShadow.TextTransparency = 0 end
+		end
+		return label
+	end
+	return IndicatorController._createDamageLabel()
+end
+
+function IndicatorController:_releaseLabel(label)
+	if not label or not label:IsA("BasePart") then
+		return
+	end
+	label.Parent = nil
+	label.Velocity = Vector3.new(0, 0, 0)
+	label.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+	label.Position = Vector3.new(0, 0, 0)
+	local billboard = label:FindFirstChild("BillboardGui")
+	if billboard then
+		local shadow = billboard:FindFirstChild("Shadow")
+		local theShadow = billboard:FindFirstChild("TheShadow")
+		if shadow then
+			shadow.Text = ""
+			shadow.TextTransparency = 1
+		end
+		if theShadow then
+			theShadow.Text = ""
+			theShadow.TextTransparency = 1
+		end
+	end
+	if #self._labelPool < 50 then
+		table.insert(self._labelPool, label)
+	else
+		label:Destroy()
+	end
 end
 
 -- ========================================
@@ -216,6 +265,16 @@ function IndicatorController:disable()
 		end
 		self._instances[character] = nil
 	end
+
+	-- Destroy any cached labels in the pool to free memory
+	for i = 1, #self._labelPool do
+		local label = self._labelPool[i]
+		if label and label.Destroy then
+			label:Destroy()
+		end
+		self._labelPool[i] = nil
+	end
+	self._labelPool = {}
 end
 
 -- ========================================
@@ -315,8 +374,7 @@ end
 --// OPTIMIZATION: Reduced string operations, cached values, optimized math
 function IndicatorController:_showIndicator(instance, amount, isHeal)
 	-- Create the indicator label
-	local label = IndicatorController._createDamageLabel()
-	-- Place the part at the character's root and tween its CFrame upward (no physics/velocity)
+	local label = self:_acquireLabel()
 	local hrp = instance.hrp
 	if hrp and hrp:IsA("BasePart") then
 		label.CFrame = hrp.CFrame * CFrame.new(0, 2, 0)
@@ -324,6 +382,25 @@ function IndicatorController:_showIndicator(instance, amount, isHeal)
 		label.CFrame = CFrame.new(0, 5, 0)
 	end
 	label.Parent = workspace
+
+	-- Set different movement patterns based on indicator type
+	-- OPTIMIZATION: Reuse tempVelocity vector to reduce allocations
+	if isHeal then
+		-- Healing: slower upward movement with less horizontal spread
+		tempVelocity = Vector3.new(
+			math.random(HEAL_VEL_H[1], HEAL_VEL_H[2]),
+			math.random(HEAL_VEL_V[1], HEAL_VEL_V[2]),
+			math.random(HEAL_VEL_H[1], HEAL_VEL_H[2])
+		)
+	else
+		-- Damage: faster upward movement with more horizontal spread
+		tempVelocity = Vector3.new(
+			math.random(DAMAGE_VEL_H[1], DAMAGE_VEL_H[2]),
+			math.random(DAMAGE_VEL_V[1], DAMAGE_VEL_V[2]),
+			math.random(DAMAGE_VEL_H[1], DAMAGE_VEL_H[2])
+		)
+	end
+	label.AssemblyLinearVelocity = tempVelocity
 
 	-- Format the display text
 	-- OPTIMIZATION: Avoid string.format for simple cases, use direct conversion
@@ -350,15 +427,13 @@ function IndicatorController:_showIndicator(instance, amount, isHeal)
 
 	-- Animate the color change and cleanup
 	TweenService:Create(theShadow, TWEEN_INFO, {TextColor3 = color}):Play()
-	-- Fade out text and move upward
-	local moveInfo = TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
-	local targetCFrame = (hrp and hrp:IsA("BasePart") and (hrp.CFrame * CFrame.new(0, 4, 0))) or (label.CFrame * CFrame.new(0, 2, 0))
 	pcall(function()
-		TweenService:Create(label, moveInfo, {CFrame = targetCFrame}):Play()
 		TweenService:Create(shadow, TweenInfo.new(0.7), {TextTransparency = 1}):Play()
 		TweenService:Create(theShadow, TweenInfo.new(0.7), {TextTransparency = 1}):Play()
 	end)
-	Debris:AddItem(label, 0.8)
+	task.delay(0.8, function()
+		self:_releaseLabel(label)
+	end)
 end
 
 -- ========================================
