@@ -20,8 +20,14 @@ if not ok or not UIParent then
 end
 
 -- Initialize compatibility tables
-if not getgenv().Options then getgenv().Options = {} end
-if not getgenv().Toggles then getgenv().Toggles = {} end
+local OptionsTable = getgenv().Options or {}
+local TogglesTable = getgenv().Toggles or {}
+getgenv().Options = OptionsTable
+getgenv().Toggles = TogglesTable
+_G.Options = OptionsTable
+_G.Toggles = TogglesTable
+shared.Options = OptionsTable
+shared.Toggles = TogglesTable
 
 local RogueUI = {
     Theme = {
@@ -118,7 +124,7 @@ function RogueUI:CreateWindow(options)
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "RogueHubGui"
     screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
     screenGui.Parent = UIParent
     
     -- Main Frame
@@ -450,6 +456,7 @@ function RogueUI:CreateWindow(options)
             content.Size = UDim2.new(1, 0, 1, -24)
             content.Position = UDim2.new(0, 0, 0, 24)
             content.BackgroundTransparency = 1
+            content.ClipDescendants = false
             content.Parent = groupFrame
             
             local contentLayout = Instance.new("UIListLayout")
@@ -762,25 +769,34 @@ function RogueUI:CreateWindow(options)
                 buttonBorder.Color = RogueUI.Theme.BorderInactive
                 buttonBorder.Parent = button
                 
-                -- Expanded menu
+                -- Expanded menu (overlay parented to ScreenGui for proper z-ordering)
                 local menu = Instance.new("Frame")
-                menu.Name = "Menu"
-                menu.Size = UDim2.new(1, 0, 0, 0)
-                menu.Position = UDim2.new(0, 0, 1, 1)
+                menu.Name = id .. "DropdownMenu"
+                menu.Size = UDim2.new(0, 0, 0, 0)
                 menu.BackgroundColor3 = RogueUI.Theme.GroupBackground
                 menu.BorderSizePixel = 0
                 menu.Visible = false
                 menu.ZIndex = 100
-                menu.Parent = button
+                menu.Parent = screenGui
                 
                 local menuBorder = Instance.new("UIStroke")
                 menuBorder.Thickness = 1
                 menuBorder.Color = RogueUI.Theme.BorderColor
                 menuBorder.Parent = menu
                 
+                local menuScroll = Instance.new("ScrollingFrame")
+                menuScroll.Name = "Scroll"
+                menuScroll.Size = UDim2.new(1, 0, 1, 0)
+                menuScroll.BackgroundTransparency = 1
+                menuScroll.BorderSizePixel = 0
+                menuScroll.ScrollBarThickness = 3
+                menuScroll.ScrollBarImageColor3 = RogueUI.Theme.BorderColor
+                menuScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+                menuScroll.Parent = menu
+                
                 local menuLayout = Instance.new("UIListLayout")
                 menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
-                menuLayout.Parent = menu
+                menuLayout.Parent = menuScroll
                 
                 -- Construct return hybrid value
                 local function getCallbackValue()
@@ -804,25 +820,58 @@ function RogueUI:CreateWindow(options)
                 local dropdownData = { Value = getCallbackValue(), Values = values, OnChangedCallbacks = { callback } }
                 RogueUI.Dropdowns[id] = dropdownData
                 
+                -- Position the overlay menu to appear below the button
+                local function positionMenu()
+                    local absPos = button.AbsolutePosition
+                    local absSize = button.AbsoluteSize
+                    menu.Position = UDim2.new(0, absPos.X, 0, absPos.Y + absSize.Y + 1)
+                    menu.Size = UDim2.new(0, absSize.X, 0, math.min(#dropdownData.Values * 20, 160))
+                    menuScroll.CanvasSize = UDim2.new(0, 0, 0, #dropdownData.Values * 20)
+                end
+                
                 local open = false
                 local function toggleMenu()
                     open = not open
+                    if open then
+                        positionMenu()
+                    end
                     menu.Visible = open
                     buttonBorder.Color = open and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                     playClick()
-                    
-                    if open then
-                        local height = #dropdownData.Values * 20
-                        menu.Size = UDim2.new(1, 0, 0, height)
-                    else
-                        menu.Size = UDim2.new(1, 0, 0, 0)
-                    end
                 end
+                
+                -- Close dropdown when clicking outside
+                UserInputService.InputBegan:Connect(function(input)
+                    if not open then return end
+                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                        -- Delay to let button click fire first
+                        task.defer(function()
+                            if open then
+                                local mousePos = UserInputService:GetMouseLocation()
+                                local menuPos = menu.AbsolutePosition
+                                local menuSize = menu.AbsoluteSize
+                                local btnPos = button.AbsolutePosition
+                                local btnSize = button.AbsoluteSize
+                                
+                                local inMenu = mousePos.X >= menuPos.X and mousePos.X <= menuPos.X + menuSize.X
+                                    and mousePos.Y >= menuPos.Y and mousePos.Y <= menuPos.Y + menuSize.Y
+                                local inBtn = mousePos.X >= btnPos.X and mousePos.X <= btnPos.X + btnSize.X
+                                    and mousePos.Y >= btnPos.Y and mousePos.Y <= btnPos.Y + btnSize.Y
+                                
+                                if not inMenu and not inBtn then
+                                    open = false
+                                    menu.Visible = false
+                                    buttonBorder.Color = RogueUI.Theme.BorderInactive
+                                end
+                            end
+                        end)
+                    end
+                end)
                 
                 button.MouseButton1Click:Connect(toggleMenu)
                 
                 local function populateOptions()
-                    for _, child in ipairs(menu:GetChildren()) do
+                    for _, child in ipairs(menuScroll:GetChildren()) do
                         if child:IsA("TextButton") then child:Destroy() end
                     end
                     
@@ -838,7 +887,7 @@ function RogueUI:CreateWindow(options)
                         opt.TextSize = 15
                         opt.TextTruncate = Enum.TextTruncate.AtEnd
                         opt.ZIndex = 101
-                        opt.Parent = menu
+                        opt.Parent = menuScroll
                         
                         opt.MouseEnter:Connect(function()
                             opt.TextColor3 = RogueUI.Theme.TextActive
@@ -917,18 +966,27 @@ function RogueUI:CreateWindow(options)
                 return dropdownData
             end
             
-            function group_Self:AddLabel(text)
+            function group_Self:AddLabel(text, isMultiLine)
                 local label = Instance.new("TextLabel")
                 label.Name = "Label"
-                label.Size = UDim2.new(1, 0, 0, 16)
                 label.BackgroundTransparency = 1
                 label.Text = text
                 label.TextColor3 = RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
                 label.TextSize = 15
-                label.TextTruncate = Enum.TextTruncate.AtEnd
                 label.TextXAlignment = Enum.TextXAlignment.Left
                 label.Parent = content
+                
+                if isMultiLine then
+                    label.Size = UDim2.new(1, 0, 0, 0)
+                    label.AutomaticSize = Enum.AutomaticSize.Y
+                    label.TextWrapped = true
+                    label.TextYAlignment = Enum.TextYAlignment.Top
+                    label.RichText = true
+                else
+                    label.Size = UDim2.new(1, 0, 0, 16)
+                    label.TextTruncate = Enum.TextTruncate.AtEnd
+                end
                 
                 local label_Self = {}
                 function label_Self:SetText(newText)
