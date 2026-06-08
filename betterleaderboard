@@ -19,7 +19,19 @@ local CONFIG = {
         WHITE = Color3.new(1, 1, 1),
         GRAY = Color3.fromRGB(180, 180, 180),
         GREEN = Color3.new(49/51, 197/255, 26/51),
-        BLACK = Color3.new(0, 0, 0)
+        BLACK = Color3.new(0, 0, 0),
+        HEALER_T1 = Color3.fromRGB(102, 204, 255),
+        HEALER_T2 = Color3.fromRGB(0, 170, 255),
+        HEALER_T3 = Color3.fromRGB(0, 119, 255),
+        SEER_T1 = Color3.fromRGB(204, 255, 102),
+        SEER_T2 = Color3.fromRGB(170, 255, 0),
+        SEER_T3 = Color3.fromRGB(119, 204, 0),
+        BLADEMASTER_T1 = Color3.fromRGB(255, 153, 102),
+        BLADEMASTER_T1_5 = Color3.fromRGB(255, 119, 51),
+        BLADEMASTER_T2 = Color3.fromRGB(255, 85, 0),
+        MAX_EDICT = Color3.fromRGB(255, 165, 0),
+        HAS_OBSERVE = Color3.fromRGB(255, 0, 0),
+        GREATER_NAVARAN = Color3.fromRGB(75, 0, 130),
     },
     
     -- Asset IDs
@@ -285,10 +297,8 @@ function BetterLeaderboard:_updateAllLabelsColor()
                 local labelUserId = label:GetAttribute("PlayerUserId")
                 if labelUserId then
                     local p = Players:GetPlayerByUserId(labelUserId)
-                    if self._currentCameraTarget and labelUserId == self._currentCameraTarget.UserId then
-                        label.TextColor3 = Color3.fromRGB(80, 180, 255)
-                    elseif p and p.Character then
-                        label.TextColor3 = CONFIG.COLORS.WHITE
+                    if p then
+                        label.TextColor3 = self:_getPlayerLabelColor(p)
                     else
                         label.TextColor3 = Color3.fromRGB(120, 120, 120)
                     end
@@ -303,13 +313,66 @@ end
 -- @param rogueName string: The player's rogue display name
 -- @param parent Instance: Parent container for the label
 -- @return TextButton: The player label instance
+function BetterLeaderboard:_getPlayerEdictColor(player)
+    if not (utils and utils.getPlayerEdictData) then
+        return nil
+    end
+
+    local edictData = utils:getPlayerEdictData(player)
+    if not edictData then
+        return nil
+    end
+
+    local display = edictData.edictDisplay or edictData.edict
+    if display == "Healer T1" then
+        return CONFIG.COLORS.HEALER_T1
+    elseif display == "Healer T2" then
+        return CONFIG.COLORS.HEALER_T2
+    elseif display == "Healer T3" then
+        return CONFIG.COLORS.HEALER_T3
+    elseif display == "Seer T1" then
+        return CONFIG.COLORS.SEER_T1
+    elseif display == "Seer T2" then
+        return CONFIG.COLORS.SEER_T2
+    elseif display == "Seer T3" then
+        return CONFIG.COLORS.SEER_T3
+    elseif display == "Blademaster T1" then
+        return CONFIG.COLORS.BLADEMASTER_T1
+    elseif display == "Blademaster T1.5" then
+        return CONFIG.COLORS.BLADEMASTER_T1_5
+    elseif display == "Blademaster T2" then
+        return CONFIG.COLORS.BLADEMASTER_T2
+    end
+
+    return nil
+end
+
+function BetterLeaderboard:_getPlayerLabelColor(player)
+    if self._currentCameraTarget == player then
+        return Color3.fromRGB(80, 180, 255)
+    end
+
+    if not player.Character then
+        return Color3.fromRGB(120, 120, 120)
+    end
+
+    local edictColor = self:_getPlayerEdictColor(player)
+    if edictColor then
+        return edictColor
+    end
+
+    return CONFIG.COLORS.WHITE
+end
+
+--- Creates a player label with hover and right-click camera functionality
+-- @param player Player: The player this label represents
+-- @param rogueName string: The player's rogue display name
+-- @param parent Instance: Parent container for the label
+-- @return TextButton: The player label instance
 function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     local playerLabel = Instance.new("TextButton")
     playerLabel.Name = "PlayerLabel"
-    local hasCharacter = player.Character ~= nil
-    local isObserved = self._currentCameraTarget == player
-    playerLabel.TextColor3 = isObserved and Color3.fromRGB(80, 180, 255)
-        or (hasCharacter and CONFIG.COLORS.WHITE or Color3.fromRGB(120, 120, 120))
+    playerLabel.TextColor3 = self:_getPlayerLabelColor(player)
     playerLabel.BorderColor3 = CONFIG.COLORS.BLACK
     playerLabel.Text = rogueName or "Carregando..."
     playerLabel:SetAttribute("RogueDisplay", rogueName or "")
@@ -333,42 +396,15 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     -- Right-click: alterna câmera
     local mouseConn = playerLabel.MouseButton2Click:Connect(function()
         self:_toggleCameraToPlayer(player)
-        if self.scrollingFrame then
-            for _, frame in ipairs(self.scrollingFrame:GetChildren()) do
-                if frame:IsA("Frame") then
-                    local label = frame:FindFirstChild("PlayerLabel")
-                    if label and label:IsA("TextButton") then
-                        local labelUserId = label:GetAttribute("PlayerUserId")
-                        if labelUserId and self._currentCameraTarget and labelUserId == self._currentCameraTarget.UserId then
-                            label.TextColor3 = Color3.fromRGB(80, 180, 255)
-                        elseif labelUserId then
-                            local p = Players:GetPlayerByUserId(labelUserId)
-                            if p and p.Character then
-                                label.TextColor3 = CONFIG.COLORS.WHITE
-                            else
-                                label.TextColor3 = Color3.fromRGB(120, 120, 120)
-                            end
-                        end
-                    end
-                end
-            end
-        end
+        self:_updateAllLabelsColor()
     end)
 
     -- Atualiza cor se o character aparecer/desaparecer
     local charAddedConn = player.CharacterAdded:Connect(function()
-        if self._currentCameraTarget == player then
-            playerLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
-        else
-            playerLabel.TextColor3 = CONFIG.COLORS.WHITE
-        end
+        playerLabel.TextColor3 = self:_getPlayerLabelColor(player)
     end)
     local charRemovingConn = player.CharacterRemoving:Connect(function()
-        if self._currentCameraTarget == player then
-            playerLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
-        else
-            playerLabel.TextColor3 = Color3.fromRGB(120, 120, 120)
-        end
+        playerLabel.TextColor3 = self:_getPlayerLabelColor(player)
     end)
     self._connMgr:add(mouseConn)
     self._connMgr:add(charAddedConn)
@@ -389,13 +425,7 @@ function BetterLeaderboard:_setupLabelHover(playerLabel, player)
         playerLabel.Text = player.Name
     end)
     local leave = playerLabel.MouseLeave:Connect(function()
-        if self._currentCameraTarget == player then
-            playerLabel.TextColor3 = Color3.fromRGB(80, 180, 255)
-        elseif player.Character then
-            playerLabel.TextColor3 = CONFIG.COLORS.WHITE
-        else
-            playerLabel.TextColor3 = Color3.fromRGB(120, 120, 120)
-        end
+        playerLabel.TextColor3 = self:_getPlayerLabelColor(player)
         local rogueDisplay = playerLabel:GetAttribute("RogueDisplay")
         playerLabel.Text = (rogueDisplay and rogueDisplay ~= "") and rogueDisplay or "Loading"
     end)
