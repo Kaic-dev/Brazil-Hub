@@ -456,7 +456,6 @@ function RogueUI:CreateWindow(options)
             content.Size = UDim2.new(1, 0, 1, -24)
             content.Position = UDim2.new(0, 0, 0, 24)
             content.BackgroundTransparency = 1
-            content.ClipDescendants = false
             content.Parent = groupFrame
             
             local contentLayout = Instance.new("UIListLayout")
