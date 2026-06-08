@@ -32,6 +32,7 @@ local CONFIG = {
         MAX_EDICT = Color3.fromRGB(255, 165, 0),
         HAS_OBSERVE = Color3.fromRGB(255, 0, 0),
         GREATER_NAVARAN = Color3.fromRGB(75, 0, 130),
+        OBSERVED = Color3.fromRGB(236, 218, 16),
     },
     
     -- Asset IDs
@@ -297,10 +298,21 @@ function BetterLeaderboard:_updateAllLabelsColor()
                 local labelUserId = label:GetAttribute("PlayerUserId")
                 if labelUserId then
                     local p = Players:GetPlayerByUserId(labelUserId)
+                    local displayText = label:GetAttribute("RogueDisplay")
+                    displayText = (displayText and displayText ~= "") and displayText or "Loading"
+                    local indicator = frame:FindFirstChild("ObservedIndicator")
                     if p then
+                        label.Text = displayText
                         label.TextColor3 = self:_getPlayerLabelColor(p)
+                        if indicator then
+                            indicator.Visible = (self._currentCameraTarget and self._currentCameraTarget.UserId == labelUserId)
+                        end
                     else
+                        label.Text = displayText
                         label.TextColor3 = Color3.fromRGB(120, 120, 120)
+                        if indicator then
+                            indicator.Visible = false
+                        end
                     end
                 end
             end
@@ -529,7 +541,23 @@ function BetterLeaderboard:addPlayerFrame(player)
     
     -- Create UI elements
     local prestigeButton = self:_createPrestigeButton(prestige, playerFrame)
+
+    -- Observed indicator (small square matching Rogue Lineage style)
+    local observedIndicator = Instance.new("Frame")
+    observedIndicator.Name = "ObservedIndicator"
+    observedIndicator.Size = UDim2.new(0, 12, 0, 12)
+    observedIndicator.BackgroundColor3 = CONFIG.COLORS.OBSERVED
+    observedIndicator.BorderSizePixel = 0
+    local observedCorner = Instance.new("UICorner")
+    observedCorner.CornerRadius = UDim.new(0, 2)
+    observedCorner.Parent = observedIndicator
+    observedIndicator.Visible = (self._currentCameraTarget == player)
+    observedIndicator.Parent = playerFrame
+
     local playerLabel = self:_createPlayerLabel(player, rogueName, playerFrame)
+    -- Ensure ordering: prestige (1), indicator (2), label (3)
+    observedIndicator.LayoutOrder = 2
+    playerLabel.LayoutOrder = 3
     
     -- Start async loading if rogue name is not available
     if not rogueName then
