@@ -279,7 +279,7 @@ function RogueUI:CreateWindow(options)
     -- Toggle visibility with keybind
     UserInputService.InputBegan:Connect(function(input, gp)
         local currentKey = self_Window.ToggleKeybind and self_Window.ToggleKeybind.Value
-        if not gp and currentKey and input.KeyCode == currentKey then
+        if not UserInputService:GetFocusedTextBox() and currentKey and input.KeyCode == currentKey then
             screenGui.Enabled = not screenGui.Enabled
             playClick()
         end
