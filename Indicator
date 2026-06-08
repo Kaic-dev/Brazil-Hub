@@ -143,6 +143,8 @@ function IndicatorController.new()
 	self._connections = {}    -- Store all RBXScriptConnections
 	self._instances = {}      -- Store character tracking instances
 	self._enabled = false     -- System enabled state
+	self.showDamage = true    -- Show damage indicators
+	self.showHeal = true      -- Show heal indicators
 	return self
 end
 
@@ -262,10 +264,14 @@ function IndicatorController:_trackCharacter(character)
 
 		if delta < 0 then
 			-- Health decreased = damage (use negative delta directly)
-			self:_showIndicator(instance, -delta, false)
+			if self.showDamage then
+				self:_showIndicator(instance, -delta, false)
+			end
 		elseif delta > 0 then
 			-- Health increased = healing
-			self:_showIndicator(instance, delta, true)
+			if self.showHeal then
+				self:_showIndicator(instance, delta, true)
+			end
 		end
 
 		instance.lastHealth = newHealth
