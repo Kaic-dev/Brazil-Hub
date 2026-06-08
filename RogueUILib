@@ -75,9 +75,16 @@ local function playHover()
 end
 
 -- Draggable logic
-local function makeDraggable(frame, handle)
+local function makeDraggable(frame, handle, addCleanupConnection)
     local dragging = false
     local dragInput, dragStart, startPosition
+    
+    local function track(conn)
+        if addCleanupConnection and conn and conn.Disconnect then
+            addCleanupConnection(conn)
+        end
+        return conn
+    end
     
     local function update(input)
         local delta = input.Position - dragStart
@@ -89,31 +96,31 @@ local function makeDraggable(frame, handle)
         )
     end
     
-    handle.InputBegan:Connect(function(input)
+    track(handle.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             dragging = true
             dragStart = input.Position
             startPosition = frame.Position
             
-            input.Changed:Connect(function()
+            track(input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
                 end
-            end)
+            end))
         end
-    end)
+    end))
     
-    handle.InputChanged:Connect(function(input)
+    track(handle.InputChanged:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
-    end)
+    end))
     
-    UserInputService.InputChanged:Connect(function(input)
+    track(UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then
             update(input)
         end
-    end)
+    end))
 end
 
 -- Create main Window
@@ -259,7 +266,7 @@ function RogueUI:CreateWindow(options)
         end
     end)
     
-    makeDraggable(mainWindow, header)
+    makeDraggable(mainWindow, header, addCleanupConnection)
     
     local tabLine = Instance.new("Frame")
     tabLine.Name = "Line"
@@ -282,15 +289,22 @@ function RogueUI:CreateWindow(options)
         ToggleKeybind = { Value = toggleKey },
         CleanupConnections = {},
     }
+
+    local function addCleanupConnection(conn)
+        if conn and conn.Disconnect then
+            table.insert(self_Window.CleanupConnections, conn)
+        end
+        return conn
+    end
     
     -- Toggle visibility with keybind
-    UserInputService.InputBegan:Connect(function(input, gp)
+    addCleanupConnection(UserInputService.InputBegan:Connect(function(input, gp)
         local currentKey = self_Window.ToggleKeybind and self_Window.ToggleKeybind.Value
         if not UserInputService:GetFocusedTextBox() and currentKey and input.KeyCode == currentKey then
             screenGui.Enabled = not screenGui.Enabled
             playClick()
         end
-    end)
+    end))
     
     -- Tab class
     function self_Window:AddTab(tabName)
@@ -660,25 +674,25 @@ function RogueUI:CreateWindow(options)
                     set(val)
                 end
                 
-                track.InputBegan:Connect(function(input)
+                addCleanupConnection(track.InputBegan:Connect(function(input)
                     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         dragging = true
                         updateDrag(input)
                         playClick()
                     end
-                end)
+                end))
                 
-                UserInputService.InputEnded:Connect(function(input)
+                addCleanupConnection(UserInputService.InputEnded:Connect(function(input)
                     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         dragging = false
                     end
-                end)
+                end))
                 
-                UserInputService.InputChanged:Connect(function(input)
+                addCleanupConnection(UserInputService.InputChanged:Connect(function(input)
                     if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                         updateDrag(input)
                     end
-                end)
+                end))
                 
                 function sliderData:SetValue(val)
                     set(val)
@@ -833,6 +847,7 @@ function RogueUI:CreateWindow(options)
                 local open = false
                 local positionConnection
                 
+                local dropdownInputConn
                 local function closeDropdown()
                     open = false
                     menu.Visible = false
@@ -840,6 +855,10 @@ function RogueUI:CreateWindow(options)
                     if positionConnection then
                         positionConnection:Disconnect()
                         positionConnection = nil
+                    end
+                    if dropdownInputConn then
+                        dropdownInputConn:Disconnect()
+                        dropdownInputConn = nil
                     end
                 end
                 
@@ -850,10 +869,35 @@ function RogueUI:CreateWindow(options)
                     if open then
                         positionMenu()
                         positionConnection = RunService.Heartbeat:Connect(positionMenu)
+                        dropdownInputConn = addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
+                            if not open then return end
+                            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                                task.defer(function()
+                                    if open then
+                                        local mousePos = UserInputService:GetMouseLocation()
+                                        local menuPos = menu.AbsolutePosition
+                                        local menuSize = menu.AbsoluteSize
+                                        local btnPos = button.AbsolutePosition
+                                        local btnSize = button.AbsoluteSize
+                                        local inMenu = mousePos.X >= menuPos.X and mousePos.X <= menuPos.X + menuSize.X
+                                            and mousePos.Y >= menuPos.Y and mousePos.Y <= menuPos.Y + menuSize.Y
+                                        local inBtn = mousePos.X >= btnPos.X and mousePos.X <= btnPos.X + btnSize.X
+                                            and mousePos.Y >= btnPos.Y and mousePos.Y <= btnPos.Y + btnSize.Y
+                                        if not inMenu and not inBtn then
+                                            closeDropdown()
+                                        end
+                                    end
+                                end)
+                            end
+                        end))
                     else
                         if positionConnection then
                             positionConnection:Disconnect()
                             positionConnection = nil
+                        end
+                        if dropdownInputConn then
+                            dropdownInputConn:Disconnect()
+                            dropdownInputConn = nil
                         end
                     end
                     menu.Visible = open
@@ -862,7 +906,7 @@ function RogueUI:CreateWindow(options)
                 end
                 
                 -- Close dropdown when clicking outside
-                UserInputService.InputBegan:Connect(function(input)
+                addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
                     if not open then return end
                     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
                         -- Delay to let button click fire first
@@ -885,7 +929,7 @@ function RogueUI:CreateWindow(options)
                             end
                         end)
                     end
-                end)
+                end))
                 
                 button.MouseButton1Click:Connect(toggleMenu)
                 
@@ -1081,11 +1125,11 @@ function RogueUI:CreateWindow(options)
                         pickerBtn.TextColor3 = RogueUI.Theme.TextNormal
                         pickerBorder.Color = RogueUI.Theme.BorderColor
                         
-                        conn = UserInputService.InputBegan:Connect(function(input)
+                        conn = addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType == Enum.UserInputType.Keyboard then
                                 stopListening(input.KeyCode)
                             end
-                        end)
+                        end))
                     end)
                     
                     function keyData:SetValue(newKey)
