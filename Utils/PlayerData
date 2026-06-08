@@ -104,14 +104,82 @@ function PlayerData:getRogueData(player)
     }
 end
 
+--// Function: PlayerData:_hasBackpackItem
+--// Description: Checks whether a specific item exists in the player's backpack.
+function PlayerData:_hasBackpackItem(player, itemName)
+    return player and player.Backpack and player.Backpack:FindFirstChild(itemName) ~= nil
+end
+
+--// Function: PlayerData:_getEdictFromBackpack
+--// Description: Determines edict type and display text from backpack items.
+--// Healer tiers come from Mederi tools. Seer tiers come from Analysis/Intent
+--// and ObserveBlock + MaxEdict for T3. Blademaster is resolved from the
+--// default Edict value when no healer/seer pattern is found.
+function PlayerData:_getEdictFromBackpack(player)
+    if not player or not player.Backpack then return nil, nil end
+
+    local hasMederi = self:_hasBackpackItem(player, "Mederi")
+    local hasMederiUpgrade = self:_hasBackpackItem(player, "MederiUpgrade")
+    local hasAnalysis = self:_hasBackpackItem(player, "Analysis")
+    local hasIntent = self:_hasBackpackItem(player, "Intent")
+    local hasObserveBlock = self:_hasBackpackItem(player, "ObserveBlock")
+    local hasVerto = self:_hasBackpackItem(player, "Verto")
+    local hasGladius = self:_hasBackpackItem(player, "Gladius")
+    local hasDirk = self:_hasBackpackItem(player, "Dirk")
+    local hasVulnere = self:_hasBackpackItem(player, "Vulnere")
+    local hasMaxEdict = self:_getPlayerDataWithFallback(player, "MaxEdict", false)
+
+    if hasMederi then
+        if hasMederiUpgrade then
+            if hasMaxEdict then
+                return "Healer", "Healer T3"
+            end
+            return "Healer", "Healer T2"
+        end
+        return "Healer", "Healer T1"
+    end
+
+    if hasAnalysis then
+        if hasIntent then
+            if hasObserveBlock and hasMaxEdict then
+                return "Seer", "Seer T3"
+            end
+            return "Seer", "Seer T2"
+        end
+        return "Seer", "Seer T1"
+    end
+
+    if hasVulnere then
+        return "Blademaster", "Blademaster T2"
+    end
+
+    if hasGladius or hasDirk then
+        return "Blademaster", "Blademaster T1.5"
+    end
+
+    if hasVerto then
+        return "Blademaster", "Blademaster T1"
+    end
+
+    return nil, nil
+end
+
 --// Function: PlayerData:getEdictData
---// Description: Retrieves player edict information with attribute fallback to leaderstats.
+--// Description: Retrieves player edict information using backpack heuristics and attribute/leaderstat fallback.
 function PlayerData:getEdictData(player)
     if not player then return {} end
-    local edict = self:_getPlayerDataWithFallback(player, "Edict", "None")
+
+    local edictFromBackpack, edictDisplayFromBackpack = self:_getEdictFromBackpack(player)
+    local defaultEdict = self:_getPlayerDataWithFallback(player, "Edict", "None")
+    local edict = edictFromBackpack or defaultEdict
+    local edictDisplay = edictDisplayFromBackpack or edict
+    local maxEdict = self:_getPlayerDataWithFallback(player, "MaxEdict", false)
+
     return {
         edict        = edict,
-        edictDisplay = edict
+        edictDisplay = edictDisplay,
+        maxEdict     = maxEdict,
+        hasMaxEdict  = maxEdict == true
     }
 end
 
