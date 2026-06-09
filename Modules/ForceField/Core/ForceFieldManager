@@ -122,13 +122,10 @@ end
 
 function FFDetector:onForceFieldAdded(character, ff)
     local startTime = ensureStartTime(ff)
-
     local currentFF = self._ffTracker:find(character)
     if currentFF == ff then return end
-
-    self._ffTracker:set(character, ff)
+    self._ffTracker:set(character, ff, startTime)   -- passa startTime
     self._billboardRenderer:create(character, ff, startTime)
-
     local charMgr = self._charConnMgrs[character]
     if charMgr then charMgr:trackFF(ff) end
 end
@@ -170,17 +167,15 @@ function FFDetector:registerCharacterFF(character)
     self._charConnMgrs[character] = manager
 
     for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("ForceField") then
-            local startTime = ensureStartTime(child)
-
-            if not self._ffTracker:exists(character) then
-                self._ffTracker:set(character, child)
-            end
-
-            self._billboardRenderer:create(character, child, startTime)
-            manager:trackFF(child)
-        end
-    end
+    	if child:IsA("ForceField") then
+    	    local startTime = ensureStartTime(child)
+    	    if not self._ffTracker:exists(character) then
+    	        self._ffTracker:set(character, child, startTime)  -- passa startTime
+    	    end
+    	    self._billboardRenderer:create(character, child, startTime)
+    	    manager:trackFF(child)
+    	end
+	end
 end
 
 -- ─── Registro de player ───────────────────────────────────────────────────────
