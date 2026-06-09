@@ -357,24 +357,39 @@ end
 function SaveManager:Save(name)
     if not name or name == "" then return false end
     local HttpService = game:GetService("HttpService")
-    local data = { Toggles = {}, Options = {} }
+
+    -- FIX: usa chave string "__empty" pra forçar objeto em vez de array no JSON
+    local data = {
+        Toggles = { __empty = true },
+        Options = { __empty = true },
+    }
 
     for id, toggle in pairs(getgenv().Toggles) do
         if not self.IgnoreIndexes[id] then
-            data.Toggles[id] = toggle.Value
+            -- toggle.Value pode ser o objeto inteiro; tenta extrair boolean
+            local val = toggle.Value
+            if type(val) == "table" and val.Value ~= nil then
+                val = val.Value
+            end
+            if val ~= nil then
+                data.Toggles[id] = val
+            end
         end
     end
 
     for id, option in pairs(getgenv().Options) do
         if not self.IgnoreIndexes[id] then
             local val = option.Value
+            -- Desempacota se for wrapper
+            if type(val) == "table" and val.Value ~= nil and not val.R then
+                val = val.Value
+            end
 
             if typeof(val) == "EnumItem" then
-                -- Salva o EnumType junto para restaurar corretamente
                 data.Options[id] = {
-                    Type      = "Keybind",
-                    EnumType  = tostring(val.EnumType),
-                    Value     = val.Name,
+                    Type     = "Keybind",
+                    EnumType = tostring(val.EnumType),
+                    Value    = val.Name,
                 }
             elseif typeof(val) == "Color3" then
                 data.Options[id] = {
@@ -382,20 +397,25 @@ function SaveManager:Save(name)
                     Value = { val.R, val.G, val.B },
                 }
             elseif type(val) == "table" then
-                -- Multi-dropdown: valor é tabela de strings selecionadas
-                data.Options[id] = { Type = "Dropdown", Multi = true,  Value = val }
+                -- Multi-dropdown
+                data.Options[id] = { Type = "Dropdown", Multi = true, Value = val }
             elseif type(val) == "string" and option.Values then
-                -- Single-dropdown: valor é string
+                -- Single-dropdown
                 data.Options[id] = { Type = "Dropdown", Multi = false, Value = val }
-            else
+            elseif type(val) == "number" or type(val) == "boolean" or type(val) == "string" then
                 data.Options[id] = { Type = "Value", Value = val }
             end
+            -- nil é ignorado (não salva opção sem valor)
         end
     end
 
+    local encoded = HttpService:JSONEncode(data)
+    -- Remove a chave auxiliar do JSON final
+    encoded = encoded:gsub(',"__empty":true', ''):gsub('"__empty":true,', ''):gsub('"__empty":true', '')
+
     local ok, err = safeWriteFile(
         self.Folder .. "/configs/" .. name .. ".json",
-        HttpService:JSONEncode(data)
+        encoded
     )
     if not ok then warn("[SaveManager] Erro ao salvar:", tostring(err)) end
     return ok
@@ -414,6 +434,7 @@ function SaveManager:Load(name)
 
     if data.Toggles then
         for id, state in pairs(data.Toggles) do
+            if id == "__empty" then continue end
             local t = getgenv().Toggles[id]
             if t and not self.IgnoreIndexes[id] then
                 pcall(function() t:SetValue(state) end)
@@ -423,6 +444,7 @@ function SaveManager:Load(name)
 
     if data.Options then
         for id, optData in pairs(data.Options) do
+            if id == "__empty" then continue end
             local opt = getgenv().Options[id]
             if opt and not self.IgnoreIndexes[id] then
                 pcall(function()
