@@ -25,6 +25,14 @@ function AutoAim.new()
     return self
 end
 
+function AutoAim:setRange(range)
+    self.maxRange = range
+end
+
+function AutoAim:setFov(fov)
+    self.fovMax = fov
+end
+
 function AutoAim:getRemote()
     if self.remote then
         return self.remote
@@ -122,8 +130,7 @@ function AutoAim:getClosestTarget()
             local targetHRP = model:FindFirstChild("HumanoidRootPart")
 
             if targetHRP then
-                local distance =
-                    (targetHRP.Position - hrp.Position).Magnitude
+                local distance = (targetHRP.Position - hrp.Position).Magnitude
 
                 if distance < closestDistance then
                     closestDistance = distance
