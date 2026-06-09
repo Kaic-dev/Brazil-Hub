@@ -386,11 +386,11 @@ function PlayerESP:connectPlayer(player)
             task.wait(0.1)
             self:createBillboard(player)
         end
-    end))
+    end), "player.CharacterAdded")
     
     mgr:add(player.CharacterRemoving:Connect(function(character)
         self:removeBillboard(player)
-    end))
+    end), "player.CharacterRemoving")
     
     if player.Character then
         self:createBillboard(player)
@@ -409,7 +409,7 @@ function PlayerESP:enable()
     
     self._connMgr:add(Players.PlayerAdded:Connect(function(player)
         self:connectPlayer(player)
-    end))
+    end), "Players.PlayerAdded")
     
     self._connMgr:add(Players.PlayerRemoving:Connect(function(player)
         self:removeBillboard(player)
@@ -418,12 +418,12 @@ function PlayerESP:enable()
             mgr:disconnectAll()
             self._playerConnMgrs[player] = nil
         end
-    end))
+    end), "Players.PlayerRemoving")
     
     -- Usa Heartbeat com throttling interno otimizado
     self._connMgr:add(RunService.Heartbeat:Connect(function()
         self:updateBillboards()
-    end))
+    end), "RunService.Heartbeat")
 end
 
 function PlayerESP:disable()
