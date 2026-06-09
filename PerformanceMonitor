@@ -11,22 +11,38 @@ function PerformanceMonitor.new()
     local self = setmetatable({}, PerformanceMonitor)
     self.isEnabled = false
     self.monitors = {}
-    self.lastFrameTime = 0
     self.frameCount = 0
     self.avgFrameTime = 0
     self.maxFrameTime = 0
     self.minFrameTime = math.huge
+    self.currentFPS = 0
+    self.avgFPS = 0
+    self.maxFPS = 0
+    self.minFPS = 0
+    self.memoryUsageMb = 0
     self.performanceLabel = nil
     return self
+end
+
+function PerformanceMonitor:reset()
+    self.frameCount = 0
+    self.avgFrameTime = 0
+    self.maxFrameTime = 0
+    self.minFrameTime = math.huge
+    self.currentFPS = 0
+    self.avgFPS = 0
+    self.maxFPS = 0
+    self.minFPS = 0
+    self.memoryUsageMb = 0
 end
 
 function PerformanceMonitor:start()
     if self.isEnabled then return end
     self.isEnabled = true
-    self.lastFrameTime = tick()
+    self:reset()
     
-    self.connection = RunService.Heartbeat:Connect(function()
-        self:update()
+    self.connection = RunService.Heartbeat:Connect(function(dt)
+        self:update(dt)
     end)
 end
 
@@ -40,33 +56,31 @@ function PerformanceMonitor:stop()
     end
 end
 
-function PerformanceMonitor:update()
-    local currentTime = tick()
-    local frameTime = currentTime - self.lastFrameTime
-    self.lastFrameTime = currentTime
+function PerformanceMonitor:update(dt)
+    local frameTime = dt or (tick() - self.lastFrameTime)
+    self.lastFrameTime = tick()
     
     self.frameCount = self.frameCount + 1
     self.avgFrameTime = (self.avgFrameTime * (self.frameCount - 1) + frameTime) / self.frameCount
     self.maxFrameTime = math.max(self.maxFrameTime, frameTime)
     self.minFrameTime = math.min(self.minFrameTime, frameTime)
     
-    -- Reset stats every 1000 frames
+    -- Reset stats every 1000 frames to avoid stale extreme values
     if self.frameCount >= 1000 then
-        self.frameCount = 0
-        self.avgFrameTime = 0
-        self.maxFrameTime = 0
-        self.minFrameTime = math.huge
+        self:reset()
     end
     
+    local fps = frameTime > 0 and 1 / frameTime or 0
+    self.currentFPS = fps
+    self.avgFPS = self.avgFrameTime > 0 and 1 / self.avgFrameTime or 0
+    self.maxFPS = self.minFrameTime > 0 and 1 / self.minFrameTime or 0
+    self.minFPS = self.maxFrameTime > 0 and 1 / self.maxFrameTime or 0
+    self.memoryUsageMb = Stats:GetTotalMemoryUsageMb()
+
     if self.performanceLabel then
-        local fps = frameTime > 0 and 1 / frameTime or 0
-        local avgFps = self.avgFrameTime > 0 and 1 / self.avgFrameTime or 0
-        local maxFps = self.minFrameTime > 0 and 1 / self.minFrameTime or 0
-        local minFps = self.maxFrameTime > 0 and 1 / self.maxFrameTime or 0
-        
         self.performanceLabel:SetText(string.format(
-            "FPS: %.1f (Avg: %.1f, Max: %.1f, Min: %.1f)",
-            fps, avgFps, maxFps, minFps
+            "FPS: %.1f (Avg: %.1f, Max: %.1f, Min: %.1f) | MEM: %.1f MB",
+            fps, self.avgFPS, self.maxFPS, self.minFPS, self.memoryUsageMb
         ))
     end
 end
@@ -93,8 +107,33 @@ function PerformanceMonitor:getStats()
         avgFrameTime = self.avgFrameTime,
         maxFrameTime = self.maxFrameTime,
         minFrameTime = self.minFrameTime,
-        frameCount = self.frameCount
+        frameCount = self.frameCount,
+        currentFPS = self.currentFPS,
+        avgFPS = self.avgFPS,
+        maxFPS = self.maxFPS,
+        minFPS = self.minFPS,
+        memoryUsageMb = self.memoryUsageMb,
     }
+end
+
+function PerformanceMonitor:getCurrentFPS()
+    return self.currentFPS
+end
+
+function PerformanceMonitor:getAverageFPS()
+    return self.avgFPS
+end
+
+function PerformanceMonitor:getMaxFPS()
+    return self.maxFPS
+end
+
+function PerformanceMonitor:getMinFPS()
+    return self.minFPS
+end
+
+function PerformanceMonitor:getMemoryUsage()
+    return self.memoryUsageMb
 end
 
 return PerformanceMonitor 
