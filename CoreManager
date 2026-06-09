@@ -358,37 +358,44 @@ function SaveManager:Save(name)
     if not name or name == "" then return false end
     local HttpService = game:GetService("HttpService")
 
-    -- FIX: usa chave string "__empty" pra forçar objeto em vez de array no JSON
-    local data = {
-        Toggles = { __empty = true },
-        Options = { __empty = true },
-    }
+    local data = { Toggles = { __empty = true }, Options = { __empty = true } }
 
-    print("[SaveManager] Toggles encontrados:")
-    for id, toggle in pairs(getgenv().Toggles) do
-        print("  ", id, "=", t.Value, "(", type(t.Value), ")")
+    -- Toggles vêm de Library.Toggles
+    for id, toggle in pairs(Library.Toggles or {}) do
         if not self.IgnoreIndexes[id] then
-            -- toggle.Value pode ser o objeto inteiro; tenta extrair boolean
             local val = toggle.Value
-            if type(val) == "table" and val.Value ~= nil then
-                val = val.Value
-            end
             if val ~= nil then
                 data.Toggles[id] = val
             end
         end
     end
 
-    print("[SaveManager] Options encontradas:")
-    for id, option in pairs(getgenv().Options) do
-        print("  ", id, "=", tostring(option.Value), "(", typeof(option.Value), ")")
+    -- Sliders vêm de Library.Sliders
+    for id, slider in pairs(Library.Sliders or {}) do
+        if not self.IgnoreIndexes[id] then
+            local val = slider.Value
+            if type(val) == "number" then
+                data.Options[id] = { Type = "Value", Value = val }
+            end
+        end
+    end
+
+    -- Dropdowns vêm de Library.Dropdowns
+    for id, dropdown in pairs(Library.Dropdowns or {}) do
+        if not self.IgnoreIndexes[id] then
+            local val = dropdown.Value
+            if type(val) == "table" then
+                data.Options[id] = { Type = "Dropdown", Multi = true, Value = val }
+            elseif type(val) == "string" then
+                data.Options[id] = { Type = "Dropdown", Multi = false, Value = val }
+            end
+        end
+    end
+
+    -- ColorPickers e KeyPickers continuam vindo de getgenv().Options
+    for id, option in pairs(getgenv().Options or {}) do
         if not self.IgnoreIndexes[id] then
             local val = option.Value
-            -- Desempacota se for wrapper
-            if type(val) == "table" and val.Value ~= nil and not val.R then
-                val = val.Value
-            end
-
             if typeof(val) == "EnumItem" then
                 data.Options[id] = {
                     Type     = "Keybind",
@@ -400,21 +407,11 @@ function SaveManager:Save(name)
                     Type  = "Color",
                     Value = { val.R, val.G, val.B },
                 }
-            elseif type(val) == "table" then
-                -- Multi-dropdown
-                data.Options[id] = { Type = "Dropdown", Multi = true, Value = val }
-            elseif type(val) == "string" and option.Values then
-                -- Single-dropdown
-                data.Options[id] = { Type = "Dropdown", Multi = false, Value = val }
-            elseif type(val) == "number" or type(val) == "boolean" or type(val) == "string" then
-                data.Options[id] = { Type = "Value", Value = val }
             end
-            -- nil é ignorado (não salva opção sem valor)
         end
     end
 
     local encoded = HttpService:JSONEncode(data)
-    -- Remove a chave auxiliar do JSON final
     encoded = encoded:gsub(',"__empty":true', ''):gsub('"__empty":true,', ''):gsub('"__empty":true', '')
 
     local ok, err = safeWriteFile(
@@ -436,61 +433,54 @@ function SaveManager:Load(name)
     local ok, data = pcall(HttpService.JSONDecode, HttpService, content)
     if not ok or type(data) ~= "table" then return false end
 
+    -- Restaura Toggles
     if data.Toggles then
         for id, state in pairs(data.Toggles) do
             if id == "__empty" then continue end
-            local t = getgenv().Toggles[id]
+            local t = Library.Toggles and Library.Toggles[id]
             if t and not self.IgnoreIndexes[id] then
                 pcall(function() t:SetValue(state) end)
             end
         end
     end
 
+    -- Restaura Options (Sliders, Dropdowns, Colors, Keybinds)
     if data.Options then
         for id, optData in pairs(data.Options) do
             if id == "__empty" then continue end
-            local opt = getgenv().Options[id]
-            if opt and not self.IgnoreIndexes[id] then
+            if not self.IgnoreIndexes[id] then
                 pcall(function()
-                    if type(optData) == "table" and optData.Type then
+                    if type(optData) ~= "table" or not optData.Type then return end
 
-                        if optData.Type == "Keybind" then
-                            -- Tenta restaurar pelo EnumType salvo; fallback para KeyCode
-                            local enumType = optData.EnumType
-                            local enumItem = nil
-                            if enumType then
-                                -- Ex: "Enum.KeyCode" → tenta Enum.KeyCode[value]
-                                local shortType = enumType:match("Enum%.(.+)") or enumType
-                                local ok2, result = pcall(function()
-                                    return Enum[shortType][optData.Value]
-                                end)
-                                if ok2 then enumItem = result end
-                            end
-                            -- Fallback seguro para KeyCode
-                            if not enumItem then
-                                local ok3, result = pcall(function()
-                                    return Enum.KeyCode[optData.Value]
-                                end)
-                                if ok3 then enumItem = result end
-                            end
-                            if enumItem then opt:SetValue(enumItem) end
+                    if optData.Type == "Value" then
+                        -- Slider
+                        local s = Library.Sliders and Library.Sliders[id]
+                        if s then s:SetValue(optData.Value) end
 
-                        elseif optData.Type == "Color" then
+                    elseif optData.Type == "Dropdown" then
+                        local d = Library.Dropdowns and Library.Dropdowns[id]
+                        if d then d:SetValue(optData.Value) end
+
+                    elseif optData.Type == "Color" then
+                        local opt = getgenv().Options[id]
+                        if opt then
                             local r = optData.Value
                             opt:SetValue(Color3.new(r[1], r[2], r[3]))
-
-                        elseif optData.Type == "Dropdown" then
-                            -- Tanto single (string) quanto multi (table) passam o .Value direto
-                            opt:SetValue(optData.Value)
-
-                        else
-                            -- "Value" e qualquer tipo desconhecido
-                            opt:SetValue(optData.Value)
                         end
 
-                    else
-                        -- Formato legado (valor direto sem wrapper)
-                        opt:SetValue(optData)
+                    elseif optData.Type == "Keybind" then
+                        local opt = getgenv().Options[id]
+                        if opt then
+                            local shortType = (optData.EnumType or ""):match("Enum%.(.+)") or "KeyCode"
+                            local enumItem
+                            local ok2, result = pcall(function() return Enum[shortType][optData.Value] end)
+                            if ok2 then enumItem = result end
+                            if not enumItem then
+                                local ok3, result2 = pcall(function() return Enum.KeyCode[optData.Value] end)
+                                if ok3 then enumItem = result2 end
+                            end
+                            if enumItem then opt:SetValue(enumItem) end
+                        end
                     end
                 end)
             end
