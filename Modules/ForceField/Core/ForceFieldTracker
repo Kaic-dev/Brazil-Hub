@@ -12,9 +12,10 @@ function FFTracker.new()
     return self
 end
 
-function FFTracker:set(character, ff)
+function FFTracker:set(character, ff, startTime)
     if not character or not ff then return end
-    local startTime = ff:GetAttribute("StartTime") or getTime()
+    -- startTime vem do caller — sem releitura de atributo, sem fallback com fonte errada
+    startTime = startTime or os.clock()
     if ff.Parent then
         ff:SetAttribute("StartTime", startTime)
     end
