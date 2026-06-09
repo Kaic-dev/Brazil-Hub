@@ -2,90 +2,79 @@
 -- Features sharp edges, Garamond typography, muted dark palette, and complete LinoriaLib-like API
 
 local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local RunService = game:GetService("RunService")
-local Players = game:GetService("Players")
-local CoreGui = game:GetService("CoreGui")
+local TweenService     = game:GetService("TweenService")
+local RunService       = game:GetService("RunService")
+local Players          = game:GetService("Players")
+local CoreGui          = game:GetService("CoreGui")
 
 local LocalPlayer = Players.LocalPlayer
-local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
 
--- Determine safe UI parent
 local UIParent = nil
-local ok, err = pcall(function()
-    UIParent = CoreGui
-end)
-if not ok or not UIParent then
-    UIParent = PlayerGui
-end
+local ok = pcall(function() UIParent = CoreGui end)
+if not ok or not UIParent then UIParent = PlayerGui end
 
--- Initialize compatibility tables
 local OptionsTable = getgenv().Options or {}
 local TogglesTable = getgenv().Toggles or {}
-getgenv().Options = OptionsTable
-getgenv().Toggles = TogglesTable
-_G.Options = OptionsTable
-_G.Toggles = TogglesTable
-shared.Options = OptionsTable
-shared.Toggles = TogglesTable
+getgenv().Options  = OptionsTable
+getgenv().Toggles  = TogglesTable
+_G.Options         = OptionsTable
+_G.Toggles         = TogglesTable
+shared.Options     = OptionsTable
+shared.Toggles     = TogglesTable
 
 local RogueUI = {
     Theme = {
-        MainBackground = Color3.fromRGB(12, 12, 14),
-        ParchmentTexture = "rbxassetid://1327087642",
+        MainBackground       = Color3.fromRGB(12, 12, 14),
+        ParchmentTexture     = "rbxassetid://1327087642",
         ParchmentTransparency = 0.92,
-        BorderColor = Color3.fromRGB(115, 95, 65), -- Gold/Bronze envelhecido
-        BorderInactive = Color3.fromRGB(45, 45, 48),
-        TextActive = Color3.fromRGB(205, 170, 105), -- Ouro clássico
-        TextNormal = Color3.fromRGB(229, 229, 224), -- Branco fosco
-        TextMuted = Color3.fromRGB(130, 130, 132), -- Cinza inativo
-        ToggleXColor = Color3.fromRGB(180, 50, 50), -- Vermelho gótico para o X
-        HeaderBackground = Color3.fromRGB(8, 8, 10),
-        GroupBackground = Color3.fromRGB(16, 16, 18),
+        BorderColor          = Color3.fromRGB(115, 95, 65),
+        BorderInactive       = Color3.fromRGB(45, 45, 48),
+        TextActive           = Color3.fromRGB(205, 170, 105),
+        TextNormal           = Color3.fromRGB(229, 229, 224),
+        TextMuted            = Color3.fromRGB(130, 130, 132),
+        ToggleXColor         = Color3.fromRGB(180, 50, 50),
+        HeaderBackground     = Color3.fromRGB(8, 8, 10),
+        GroupBackground      = Color3.fromRGB(16, 16, 18),
     },
-    Registry = {},
-    Toggles = {},
-    Sliders = {},
+    Registry  = {},
+    Toggles   = {},
+    Sliders   = {},
     Dropdowns = {},
 }
 
--- Utility for sound effects
-local function playSound(soundId, volume)
-    task.spawn(function()
-        local sound = Instance.new("Sound")
-        sound.SoundId = soundId
-        sound.Volume = volume or 0.5
-        sound.Parent = workspace.CurrentCamera or workspace
-        if not sound.IsLoaded then
-            sound.Loaded:Wait()
-        end
-        sound:Play()
-        sound.Ended:Connect(function()
-            sound:Destroy()
-        end)
-    end)
-end
+-- FIX: pool de sons — reutiliza instâncias em vez de criar uma por clique
+local SOUND_POOL_SIZE = 3
+local soundPool = {}
+local soundPoolIndex = 0
 
-local function playClick()
-    playSound("rbxassetid://9114223297", 0.4) -- Seco/madeira
-end
-
-local function playHover()
-    playSound("rbxassetid://9114221327", 0.2) -- Papel sutil
-end
-
--- Draggable logic
-local function makeDraggable(frame, handle, addCleanupConnection)
-    local dragging = false
-    local dragInput, dragStart, startPosition
-    
-    local function track(conn)
-        if addCleanupConnection and conn and conn.Disconnect then
-            addCleanupConnection(conn)
-        end
-        return conn
+local function initSoundPool()
+    for i = 1, SOUND_POOL_SIZE do
+        local s = Instance.new("Sound")
+        s.Parent = workspace.CurrentCamera or workspace
+        soundPool[i] = s
     end
-    
+end
+pcall(initSoundPool)
+
+local function playSound(soundId, volume)
+    soundPoolIndex = (soundPoolIndex % SOUND_POOL_SIZE) + 1
+    local sound = soundPool[soundPoolIndex]
+    if not sound then return end
+    sound.SoundId  = soundId
+    sound.Volume   = volume or 0.5
+    sound:Stop()
+    sound:Play()
+end
+
+local function playClick() playSound("rbxassetid://9114223297", 0.4) end
+local function playHover() playSound("rbxassetid://9114221327", 0.2) end
+
+-- Draggable — FIX: recebe addCleanupFn e registra todas as connections
+local function makeDraggable(frame, handle, addCleanupFn)
+    local dragging      = false
+    local dragInput, dragStart, startPosition
+
     local function update(input)
         local delta = input.Position - dragStart
         frame.Position = UDim2.new(
@@ -95,556 +84,539 @@ local function makeDraggable(frame, handle, addCleanupConnection)
             startPosition.Y.Offset + delta.Y
         )
     end
-    
-    track(handle.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
+
+    addCleanupFn(handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            dragging      = true
+            dragStart     = input.Position
             startPosition = frame.Position
-            
-            track(input.Changed:Connect(function()
+            addCleanupFn(input.Changed:Connect(function()
                 if input.UserInputState == Enum.UserInputState.End then
                     dragging = false
                 end
             end))
         end
     end))
-    
-    track(handle.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+
+    addCleanupFn(handle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end))
-    
-    track(UserInputService.InputChanged:Connect(function(input)
-        if input == dragInput and dragging then
-            update(input)
-        end
+
+    addCleanupFn(UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then update(input) end
     end))
 end
 
--- Create main Window
 function RogueUI:CreateWindow(options)
-    local titleText = options.Title or "[Rogue UI]"
+    local titleText = options.Title    or "[Rogue UI]"
     local toggleKey = options.ToggleKey or Enum.KeyCode.RightShift
-    
-    local screenGui = Instance.new("ScreenGui")
-    screenGui.Name = "RogueHubGui"
-    screenGui.ResetOnSpawn = false
-    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    screenGui.Parent = UIParent
-    
-    -- Main Frame
-    local mainWindow = Instance.new("Frame")
-    mainWindow.Name = "MainWindow"
-    mainWindow.Size = UDim2.new(0, 570, 0, 420)
-    mainWindow.Position = UDim2.new(0.5, -285, 0.5, -210)
-    mainWindow.BackgroundColor3 = self.Theme.MainBackground
-    mainWindow.BorderSizePixel = 0
-    mainWindow.Active = true
-    mainWindow.Parent = screenGui
-    
-    -- Parchment texture overlay
-    local texture = Instance.new("ImageLabel")
-    texture.Name = "Texture"
-    texture.Size = UDim2.new(1, 0, 1, 0)
-    texture.BackgroundTransparency = 1
-    texture.Image = self.Theme.ParchmentTexture
-    texture.ImageTransparency = self.Theme.ParchmentTransparency
-    texture.ScaleType = Enum.ScaleType.Tile
-    texture.TileSize = UDim2.new(0, 256, 0, 256)
-    texture.Parent = mainWindow
-    
-    -- Sharp Border
-    local border = Instance.new("UIStroke")
-    border.Thickness = 1
-    border.Color = self.Theme.BorderColor
-    border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    border.Parent = mainWindow
-    
-    -- Header Bar
-    local header = Instance.new("Frame")
-    header.Name = "Header"
-    header.Size = UDim2.new(1, 0, 0, 32)
-    header.BackgroundColor3 = self.Theme.HeaderBackground
-    header.BorderSizePixel = 0
-    header.Parent = mainWindow
-    
-    local headerLine = Instance.new("Frame")
-    headerLine.Name = "Line"
-    headerLine.Size = UDim2.new(1, 0, 0, 1)
-    headerLine.Position = UDim2.new(0, 0, 1, -1)
-    headerLine.BackgroundColor3 = self.Theme.BorderColor
-    headerLine.BorderSizePixel = 0
-    headerLine.Parent = header
-    
-    local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.Size = UDim2.new(1, -80, 1, 0)
-    title.Position = UDim2.new(0, 12, 0, 0)
-    title.BackgroundTransparency = 1
-    title.Text = titleText
-    title.TextColor3 = self.Theme.TextActive
-    title.Font = Enum.Font.Garamond
-    title.TextSize = 18
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = header
-    
-    -- Close button
-    local closeBtn = Instance.new("TextButton")
-    closeBtn.Name = "Close"
-    closeBtn.Size = UDim2.new(0, 32, 0, 32)
-    closeBtn.Position = UDim2.new(1, -32, 0, 0)
-    closeBtn.BackgroundTransparency = 1
-    closeBtn.Text = "X"
-    closeBtn.TextColor3 = self.Theme.TextNormal
-    closeBtn.Font = Enum.Font.Garamond
-    closeBtn.TextSize = 16
-    closeBtn.Parent = header
-    
-    closeBtn.MouseEnter:Connect(function()
-        closeBtn.TextColor3 = self.Theme.ToggleXColor
-    end)
-    closeBtn.MouseLeave:Connect(function()
-        closeBtn.TextColor3 = self.Theme.TextNormal
-    end)
-    closeBtn.MouseButton1Click:Connect(function()
-        playClick()
-        screenGui.Enabled = false
-    end)
-    
-    -- Tab Container (defined here for minimize reference)
-    local tabContainer = Instance.new("Frame")
-    tabContainer.Name = "TabContainer"
-    tabContainer.Size = UDim2.new(0, 120, 1, -32)
-    tabContainer.Position = UDim2.new(0, 0, 0, 32)
-    tabContainer.BackgroundColor3 = self.Theme.HeaderBackground
-    tabContainer.BorderSizePixel = 0
-    tabContainer.Parent = mainWindow
-    
-    -- Pages Container (defined here for minimize reference)
-    local pages = Instance.new("Frame")
-    pages.Name = "Pages"
-    pages.Size = UDim2.new(1, -120, 1, -32)
-    pages.Position = UDim2.new(0, 120, 0, 32)
-    pages.BackgroundTransparency = 1
-    pages.Parent = mainWindow
 
-    -- Minimize button
-    local minBtn = Instance.new("TextButton")
-    minBtn.Name = "Minimize"
-    minBtn.Size = UDim2.new(0, 32, 0, 32)
-    minBtn.Position = UDim2.new(1, -64, 0, 0)
-    minBtn.BackgroundTransparency = 1
-    minBtn.Text = "-"
-    minBtn.TextColor3 = self.Theme.TextNormal
-    minBtn.Font = Enum.Font.Garamond
-    minBtn.TextSize = 18
-    minBtn.Parent = header
-    
-    local isMinimized = false
-    minBtn.MouseEnter:Connect(function()
-        minBtn.TextColor3 = self.Theme.TextActive
-        playHover()
-    end)
-    minBtn.MouseLeave:Connect(function()
-        minBtn.TextColor3 = self.Theme.TextNormal
-    end)
-    minBtn.MouseButton1Click:Connect(function()
-        playClick()
-        isMinimized = not isMinimized
-        if isMinimized then
-            mainWindow.Size = UDim2.new(0, 570, 0, 32)
-            tabContainer.Visible = false
-            pages.Visible = false
-            minBtn.Text = "+"
-        else
-            mainWindow.Size = UDim2.new(0, 570, 0, 420)
-            tabContainer.Visible = true
-            pages.Visible = true
-            minBtn.Text = "-"
-        end
-    end)
-    
-    makeDraggable(mainWindow, header, addCleanupConnection)
-    
-    local tabLine = Instance.new("Frame")
-    tabLine.Name = "Line"
-    tabLine.Size = UDim2.new(0, 1, 1, 0)
-    tabLine.Position = UDim2.new(1, -1, 0, 0)
-    tabLine.BackgroundColor3 = self.Theme.BorderColor
-    tabLine.BorderSizePixel = 0
-    tabLine.Parent = tabContainer
-    
-    local tabList = Instance.new("UIListLayout")
-    tabList.SortOrder = Enum.SortOrder.LayoutOrder
-    tabList.Padding = UDim.new(0, 1)
-    tabList.Parent = tabContainer
-    
+    -- CleanupConnections declarado ANTES de qualquer uso
     local self_Window = {
-        Gui = screenGui,
-        Frame = mainWindow,
-        Tabs = {},
-        ActiveTab = nil,
-        ToggleKeybind = { Value = toggleKey },
+        Gui                = nil,
+        Frame              = nil,
+        Tabs               = {},
+        ActiveTab          = nil,
+        ToggleKeybind      = { Value = toggleKey },
         CleanupConnections = {},
     }
 
+    -- FIX: declarada antes de makeDraggable para que o drag seja corretamente registrado
     local function addCleanupConnection(conn)
-        if conn and conn.Disconnect then
+        if type(conn) == "function" or (conn and conn.Disconnect) then
             table.insert(self_Window.CleanupConnections, conn)
         end
         return conn
     end
-    
-    -- Toggle visibility with keybind
-    addCleanupConnection(UserInputService.InputBegan:Connect(function(input, gp)
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name          = "RogueHubGui"
+    screenGui.ResetOnSpawn  = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    screenGui.Parent        = UIParent
+    self_Window.Gui         = screenGui
+
+    local mainWindow = Instance.new("Frame")
+    mainWindow.Name             = "MainWindow"
+    mainWindow.Size             = UDim2.new(0, 570, 0, 420)
+    mainWindow.Position         = UDim2.new(0.5, -285, 0.5, -210)
+    mainWindow.BackgroundColor3 = self.Theme.MainBackground
+    mainWindow.BorderSizePixel  = 0
+    mainWindow.Active           = true
+    mainWindow.Parent           = screenGui
+    self_Window.Frame           = mainWindow
+
+    local texture = Instance.new("ImageLabel")
+    texture.Size               = UDim2.new(1, 0, 1, 0)
+    texture.BackgroundTransparency = 1
+    texture.Image              = self.Theme.ParchmentTexture
+    texture.ImageTransparency  = self.Theme.ParchmentTransparency
+    texture.ScaleType          = Enum.ScaleType.Tile
+    texture.TileSize           = UDim2.new(0, 256, 0, 256)
+    texture.Parent             = mainWindow
+
+    local border = Instance.new("UIStroke")
+    border.Thickness       = 1
+    border.Color           = self.Theme.BorderColor
+    border.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    border.Parent          = mainWindow
+
+    local header = Instance.new("Frame")
+    header.Name             = "Header"
+    header.Size             = UDim2.new(1, 0, 0, 32)
+    header.BackgroundColor3 = self.Theme.HeaderBackground
+    header.BorderSizePixel  = 0
+    header.Parent           = mainWindow
+
+    local headerLine = Instance.new("Frame")
+    headerLine.Size             = UDim2.new(1, 0, 0, 1)
+    headerLine.Position         = UDim2.new(0, 0, 1, -1)
+    headerLine.BackgroundColor3 = self.Theme.BorderColor
+    headerLine.BorderSizePixel  = 0
+    headerLine.Parent           = header
+
+    local title = Instance.new("TextLabel")
+    title.Size               = UDim2.new(1, -80, 1, 0)
+    title.Position           = UDim2.new(0, 12, 0, 0)
+    title.BackgroundTransparency = 1
+    title.Text               = titleText
+    title.TextColor3         = self.Theme.TextActive
+    title.Font               = Enum.Font.Garamond
+    title.TextSize           = 18
+    title.TextXAlignment     = Enum.TextXAlignment.Left
+    title.Parent             = header
+
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size               = UDim2.new(0, 32, 0, 32)
+    closeBtn.Position           = UDim2.new(1, -32, 0, 0)
+    closeBtn.BackgroundTransparency = 1
+    closeBtn.Text               = "X"
+    closeBtn.TextColor3         = self.Theme.TextNormal
+    closeBtn.Font               = Enum.Font.Garamond
+    closeBtn.TextSize           = 16
+    closeBtn.Parent             = header
+
+    closeBtn.MouseEnter:Connect(function()  closeBtn.TextColor3 = self.Theme.ToggleXColor end)
+    closeBtn.MouseLeave:Connect(function()  closeBtn.TextColor3 = self.Theme.TextNormal   end)
+    closeBtn.MouseButton1Click:Connect(function()
+        playClick()
+        screenGui.Enabled = false
+    end)
+
+    local tabContainer = Instance.new("Frame")
+    tabContainer.Name             = "TabContainer"
+    tabContainer.Size             = UDim2.new(0, 120, 1, -32)
+    tabContainer.Position         = UDim2.new(0, 0, 0, 32)
+    tabContainer.BackgroundColor3 = self.Theme.HeaderBackground
+    tabContainer.BorderSizePixel  = 0
+    tabContainer.Parent           = mainWindow
+
+    local pages = Instance.new("Frame")
+    pages.Name               = "Pages"
+    pages.Size               = UDim2.new(1, -120, 1, -32)
+    pages.Position           = UDim2.new(0, 120, 0, 32)
+    pages.BackgroundTransparency = 1
+    pages.Parent             = mainWindow
+
+    local minBtn = Instance.new("TextButton")
+    minBtn.Size               = UDim2.new(0, 32, 0, 32)
+    minBtn.Position           = UDim2.new(1, -64, 0, 0)
+    minBtn.BackgroundTransparency = 1
+    minBtn.Text               = "-"
+    minBtn.TextColor3         = self.Theme.TextNormal
+    minBtn.Font               = Enum.Font.Garamond
+    minBtn.TextSize           = 18
+    minBtn.Parent             = header
+
+    local isMinimized   = false
+    local TWEEN_INFO    = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+    minBtn.MouseEnter:Connect(function() minBtn.TextColor3 = self.Theme.TextActive; playHover() end)
+    minBtn.MouseLeave:Connect(function() minBtn.TextColor3 = self.Theme.TextNormal end)
+    minBtn.MouseButton1Click:Connect(function()
+        playClick()
+        isMinimized = not isMinimized
+        if isMinimized then
+            -- FIX: tween no minimize em vez de salto abrupto
+            TweenService:Create(mainWindow, TWEEN_INFO, { Size = UDim2.new(0, 570, 0, 32) }):Play()
+            task.delay(0.08, function()
+                tabContainer.Visible = false
+                pages.Visible        = false
+            end)
+            minBtn.Text = "+"
+        else
+            tabContainer.Visible = true
+            pages.Visible        = true
+            TweenService:Create(mainWindow, TWEEN_INFO, { Size = UDim2.new(0, 570, 0, 420) }):Play()
+            minBtn.Text = "-"
+        end
+    end)
+
+    -- FIX: makeDraggable agora recebe addCleanupConnection já declarada
+    makeDraggable(mainWindow, header, addCleanupConnection)
+
+    local tabLine = Instance.new("Frame")
+    tabLine.Size             = UDim2.new(0, 1, 1, 0)
+    tabLine.Position         = UDim2.new(1, -1, 0, 0)
+    tabLine.BackgroundColor3 = self.Theme.BorderColor
+    tabLine.BorderSizePixel  = 0
+    tabLine.Parent           = tabContainer
+
+    local tabList = Instance.new("UIListLayout")
+    tabList.SortOrder = Enum.SortOrder.LayoutOrder
+    tabList.Padding   = UDim.new(0, 1)
+    tabList.Parent    = tabContainer
+
+    addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
         local currentKey = self_Window.ToggleKeybind and self_Window.ToggleKeybind.Value
-        if not UserInputService:GetFocusedTextBox() and currentKey and input.KeyCode == currentKey then
+        if not UserInputService:GetFocusedTextBox()
+        and currentKey
+        and input.KeyCode == currentKey then
             screenGui.Enabled = not screenGui.Enabled
             playClick()
         end
     end))
-    
-    -- Tab class
+
+    -- ── Tab ──────────────────────────────────────────────────────────────────
+
     function self_Window:AddTab(tabName)
         local tabBtn = Instance.new("TextButton")
-        tabBtn.Name = tabName .. "Tab"
-        tabBtn.Size = UDim2.new(1, 0, 0, 36)
+        tabBtn.Name               = tabName .. "Tab"
+        tabBtn.Size               = UDim2.new(1, 0, 0, 36)
         tabBtn.BackgroundTransparency = 1
-        tabBtn.Text = tabName
-        tabBtn.TextColor3 = RogueUI.Theme.TextMuted
-        tabBtn.Font = Enum.Font.Garamond
-        tabBtn.TextSize = 16
-        tabBtn.Parent = tabContainer
-        
+        tabBtn.Text               = tabName
+        tabBtn.TextColor3         = RogueUI.Theme.TextMuted
+        tabBtn.Font               = Enum.Font.Garamond
+        tabBtn.TextSize           = 16
+        tabBtn.Parent             = tabContainer
+
         local tabBorder = Instance.new("Frame")
-        tabBorder.Name = "Border"
-        tabBorder.Size = UDim2.new(1, 0, 0, 1)
-        tabBorder.Position = UDim2.new(0, 0, 1, -1)
+        tabBorder.Size             = UDim2.new(1, 0, 0, 1)
+        tabBorder.Position         = UDim2.new(0, 0, 1, -1)
         tabBorder.BackgroundColor3 = RogueUI.Theme.BorderInactive
-        tabBorder.BorderSizePixel = 0
-        tabBorder.Parent = tabBtn
-        
-        -- Tab Page
+        tabBorder.BorderSizePixel  = 0
+        tabBorder.Parent           = tabBtn
+
         local page = Instance.new("ScrollingFrame")
-        page.Name = tabName .. "Page"
-        page.Size = UDim2.new(1, 0, 1, 0)
+        page.Name                = tabName .. "Page"
+        page.Size                = UDim2.new(1, 0, 1, 0)
         page.BackgroundTransparency = 1
-        page.Visible = false
-        page.ScrollBarThickness = 4
+        page.Visible             = false
+        page.ScrollBarThickness  = 4
         page.ScrollBarImageColor3 = RogueUI.Theme.BorderColor
-        page.CanvasSize = UDim2.new(0, 0, 0, 0)
-        page.Parent = pages
-        
+        page.CanvasSize          = UDim2.new(0, 0, 0, 0)
+        page.Parent              = pages
+
         local pageLayout = Instance.new("UIListLayout")
         pageLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        pageLayout.Padding = UDim.new(0, 10)
-        pageLayout.Parent = page
-        
+        pageLayout.Padding   = UDim.new(0, 10)
+        pageLayout.Parent    = page
+
         local pagePadding = Instance.new("UIPadding")
-        pagePadding.PaddingTop = UDim.new(0, 10)
+        pagePadding.PaddingTop    = UDim.new(0, 10)
         pagePadding.PaddingBottom = UDim.new(0, 10)
-        pagePadding.PaddingLeft = UDim.new(0, 10)
-        pagePadding.PaddingRight = UDim.new(0, 10)
-        pagePadding.Parent = page
-        
-        -- Multi-column (LinoriaLib compatible groupbox containers)
+        pagePadding.PaddingLeft   = UDim.new(0, 10)
+        pagePadding.PaddingRight  = UDim.new(0, 10)
+        pagePadding.Parent        = page
+
         local columnsContainer = Instance.new("Frame")
-        columnsContainer.Name = "Columns"
-        columnsContainer.Size = UDim2.new(1, 0, 1, 0)
+        columnsContainer.Name               = "Columns"
+        columnsContainer.Size               = UDim2.new(1, 0, 1, 0)
         columnsContainer.BackgroundTransparency = 1
-        columnsContainer.Parent = page
-        
+        columnsContainer.Parent             = page
+
         local leftColumn = Instance.new("Frame")
-        leftColumn.Name = "LeftColumn"
-        leftColumn.Size = UDim2.new(0.5, -5, 1, 0)
+        leftColumn.Name               = "LeftColumn"
+        leftColumn.Size               = UDim2.new(0.5, -5, 1, 0)
         leftColumn.BackgroundTransparency = 1
-        leftColumn.Parent = columnsContainer
-        
+        leftColumn.Parent             = columnsContainer
+
         local leftLayout = Instance.new("UIListLayout")
         leftLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        leftLayout.Padding = UDim.new(0, 10)
-        leftLayout.Parent = leftColumn
-        
+        leftLayout.Padding   = UDim.new(0, 10)
+        leftLayout.Parent    = leftColumn
+
         local rightColumn = Instance.new("Frame")
-        rightColumn.Name = "RightColumn"
-        rightColumn.Size = UDim2.new(0.5, -5, 1, 0)
-        rightColumn.Position = UDim2.new(0.5, 5, 0, 0)
+        rightColumn.Name               = "RightColumn"
+        rightColumn.Size               = UDim2.new(0.5, -5, 1, 0)
+        rightColumn.Position           = UDim2.new(0.5, 5, 0, 0)
         rightColumn.BackgroundTransparency = 1
-        rightColumn.Parent = columnsContainer
-        
+        rightColumn.Parent             = columnsContainer
+
         local rightLayout = Instance.new("UIListLayout")
         rightLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        rightLayout.Padding = UDim.new(0, 10)
-        rightLayout.Parent = rightColumn
-        
+        rightLayout.Padding   = UDim.new(0, 10)
+        rightLayout.Parent    = rightColumn
+
         local tabData = {
             Button = tabBtn,
-            Page = page,
-            Left = leftColumn,
-            Right = rightColumn,
+            Page   = page,
+            Left   = leftColumn,
+            Right  = rightColumn,
         }
-        
-        -- Handle automatic scrolling bounds
+
+        -- FIX: updateCanvas chamado também quando groupboxes mudam após criação
         local function updateCanvas()
-            local leftHeight = leftLayout.AbsoluteContentSize.Y
+            local leftHeight  = leftLayout.AbsoluteContentSize.Y
             local rightHeight = rightLayout.AbsoluteContentSize.Y
-            local maxHeight = math.max(leftHeight, rightHeight)
+            local maxHeight   = math.max(leftHeight, rightHeight)
             columnsContainer.Size = UDim2.new(1, 0, 0, maxHeight)
-            page.CanvasSize = UDim2.new(0, 0, 0, maxHeight + 30)
+            page.CanvasSize       = UDim2.new(0, 0, 0, maxHeight + 30)
         end
-        
+
         leftLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvas)
         rightLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(updateCanvas)
-        
+
         local function activate()
             if self_Window.ActiveTab then
                 self_Window.ActiveTab.Button.TextColor3 = RogueUI.Theme.TextMuted
-                self_Window.ActiveTab.Page.Visible = false
+                self_Window.ActiveTab.Page.Visible      = false
             end
-            self_Window.ActiveTab = tabData
-            tabBtn.TextColor3 = RogueUI.Theme.TextActive
-            page.Visible = true
+            self_Window.ActiveTab         = tabData
+            tabBtn.TextColor3             = RogueUI.Theme.TextActive
+            page.Visible                  = true
             updateCanvas()
         end
-        
-        tabBtn.MouseButton1Click:Connect(function()
-            playClick()
-            activate()
-        end)
-        
+
+        tabBtn.MouseButton1Click:Connect(function() playClick(); activate() end)
         tabBtn.MouseEnter:Connect(function()
             if self_Window.ActiveTab ~= tabData then
                 tabBtn.TextColor3 = RogueUI.Theme.TextNormal
                 playHover()
             end
         end)
-        
         tabBtn.MouseLeave:Connect(function()
             if self_Window.ActiveTab ~= tabData then
                 tabBtn.TextColor3 = RogueUI.Theme.TextMuted
             end
         end)
-        
-        -- Activate first tab
-        if not self_Window.ActiveTab then
-            activate()
-        end
-        
-        -- Groupbox class builder
+
+        if not self_Window.ActiveTab then activate() end
+
+        -- ── Groupbox ─────────────────────────────────────────────────────────
+
         local function addGroupbox(parentCol, groupTitle)
             local groupFrame = Instance.new("Frame")
-            groupFrame.Name = groupTitle .. "Group"
-            groupFrame.Size = UDim2.new(1, 0, 0, 40)
+            groupFrame.Name             = groupTitle .. "Group"
+            groupFrame.Size             = UDim2.new(1, 0, 0, 40)
             groupFrame.BackgroundColor3 = RogueUI.Theme.GroupBackground
-            groupFrame.BorderSizePixel = 0
-            groupFrame.Parent = parentCol
-            
+            groupFrame.BorderSizePixel  = 0
+            groupFrame.Parent           = parentCol
+
             local groupBorder = Instance.new("UIStroke")
             groupBorder.Thickness = 1
-            groupBorder.Color = RogueUI.Theme.BorderInactive
-            groupBorder.Parent = groupFrame
-            
+            groupBorder.Color     = RogueUI.Theme.BorderInactive
+            groupBorder.Parent    = groupFrame
+
             local titleLabel = Instance.new("TextLabel")
-            titleLabel.Name = "Title"
-            titleLabel.Size = UDim2.new(1, -16, 0, 22)
-            titleLabel.Position = UDim2.new(0, 8, 0, 2)
+            titleLabel.Size               = UDim2.new(1, -16, 0, 22)
+            titleLabel.Position           = UDim2.new(0, 8, 0, 2)
             titleLabel.BackgroundTransparency = 1
-            titleLabel.Text = groupTitle
-            titleLabel.TextColor3 = RogueUI.Theme.TextActive
-            titleLabel.Font = Enum.Font.Garamond
-            titleLabel.TextSize = 15
-            titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-            titleLabel.Parent = groupFrame
-            
+            titleLabel.Text               = groupTitle
+            titleLabel.TextColor3         = RogueUI.Theme.TextActive
+            titleLabel.Font               = Enum.Font.Garamond
+            titleLabel.TextSize           = 15
+            titleLabel.TextXAlignment     = Enum.TextXAlignment.Left
+            titleLabel.Parent             = groupFrame
+
             local line = Instance.new("Frame")
-            line.Name = "Line"
-            line.Size = UDim2.new(1, -16, 0, 1)
-            line.Position = UDim2.new(0, 8, 0, 22)
+            line.Size             = UDim2.new(1, -16, 0, 1)
+            line.Position         = UDim2.new(0, 8, 0, 22)
             line.BackgroundColor3 = RogueUI.Theme.BorderInactive
-            line.BorderSizePixel = 0
-            line.Parent = groupFrame
-            
+            line.BorderSizePixel  = 0
+            line.Parent           = groupFrame
+
             local content = Instance.new("Frame")
-            content.Name = "Content"
-            content.Size = UDim2.new(1, 0, 1, -24)
-            content.Position = UDim2.new(0, 0, 0, 24)
+            content.Name               = "Content"
+            content.Size               = UDim2.new(1, 0, 1, -24)
+            content.Position           = UDim2.new(0, 0, 0, 24)
             content.BackgroundTransparency = 1
-            content.Parent = groupFrame
-            
+            content.Parent             = groupFrame
+
             local contentLayout = Instance.new("UIListLayout")
             contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
-            contentLayout.Padding = UDim.new(0, 6)
-            contentLayout.Parent = content
-            
+            contentLayout.Padding   = UDim.new(0, 6)
+            contentLayout.Parent    = content
+
             local contentPadding = Instance.new("UIPadding")
-            contentPadding.PaddingLeft = UDim.new(0, 8)
-            contentPadding.PaddingRight = UDim.new(0, 8)
-            contentPadding.PaddingTop = UDim.new(0, 6)
+            contentPadding.PaddingLeft   = UDim.new(0, 8)
+            contentPadding.PaddingRight  = UDim.new(0, 8)
+            contentPadding.PaddingTop    = UDim.new(0, 6)
             contentPadding.PaddingBottom = UDim.new(0, 6)
-            contentPadding.Parent = content
-            
+            contentPadding.Parent        = content
+
             contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
                 local height = contentLayout.AbsoluteContentSize.Y + 38
                 groupFrame.Size = UDim2.new(1, 0, 0, height)
+                -- FIX: propaga para o scroll da aba ao mudar dinamicamente
+                updateCanvas()
             end)
-            
+
             local group_Self = {}
-            
-            -- Components creation inside Groupbox
+
+            -- ── Toggle ───────────────────────────────────────────────────────
+
             function group_Self:AddToggle(id, toggleOptions)
-                local text = toggleOptions.Text or id
-                local default = toggleOptions.Default or false
+                local text     = toggleOptions.Text     or id
+                local default  = toggleOptions.Default  or false
                 local callback = toggleOptions.Callback or function() end
-                
+
                 local toggleFrame = Instance.new("Frame")
-                toggleFrame.Name = id .. "Toggle"
-                toggleFrame.Size = UDim2.new(1, 0, 0, 18)
+                toggleFrame.Name               = id .. "Toggle"
+                toggleFrame.Size               = UDim2.new(1, 0, 0, 18)
                 toggleFrame.BackgroundTransparency = 1
-                toggleFrame.Parent = content
-                
+                toggleFrame.Parent             = content
+
                 local box = Instance.new("TextButton")
-                box.Name = "Box"
-                box.Size = UDim2.new(0, 14, 0, 14)
-                box.Position = UDim2.new(0, 0, 0.5, -7)
+                box.Name             = "Box"
+                box.Size             = UDim2.new(0, 14, 0, 14)
+                box.Position         = UDim2.new(0, 0, 0.5, -7)
                 box.BackgroundColor3 = RogueUI.Theme.MainBackground
-                box.Text = ""
-                box.BorderSizePixel = 0
-                box.Parent = toggleFrame
-                
+                box.Text             = ""
+                box.BorderSizePixel  = 0
+                box.Parent           = toggleFrame
+
                 local boxBorder = Instance.new("UIStroke")
                 boxBorder.Thickness = 1
-                boxBorder.Color = RogueUI.Theme.BorderInactive
-                boxBorder.Parent = box
-                
+                boxBorder.Color     = RogueUI.Theme.BorderInactive
+                boxBorder.Parent    = box
+
                 local mark = Instance.new("TextLabel")
-                mark.Name = "Mark"
-                mark.Size = UDim2.new(1, 0, 1, 0)
+                mark.Name               = "Mark"
+                mark.Size               = UDim2.new(1, 0, 1, 0)
                 mark.BackgroundTransparency = 1
-                mark.Text = "X"
-                mark.TextColor3 = RogueUI.Theme.ToggleXColor
-                mark.Font = Enum.Font.Garamond
-                mark.TextSize = 13
-                mark.Visible = default
-                mark.Parent = box
-                
+                mark.Text               = "X"
+                mark.TextColor3         = RogueUI.Theme.ToggleXColor
+                mark.Font               = Enum.Font.Garamond
+                mark.TextSize           = 13
+                mark.Visible            = default
+                mark.Parent             = box
+
                 local label = Instance.new("TextButton")
-                label.Name = "Label"
-                label.Size = UDim2.new(1, -22, 1, 0)
-                label.Position = UDim2.new(0, 22, 0, 0)
+                label.Name               = "Label"
+                label.Size               = UDim2.new(1, -22, 1, 0)
+                label.Position           = UDim2.new(0, 22, 0, 0)
                 label.BackgroundTransparency = 1
-                label.Text = text
-                label.TextColor3 = default and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
-                label.Font = Enum.Font.Garamond
-                label.TextSize = 15
-                label.TextTruncate = Enum.TextTruncate.AtEnd
-                label.TextXAlignment = Enum.TextXAlignment.Left
-                label.Parent = toggleFrame
-                
+                label.Text               = text
+                label.TextColor3         = default and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
+                label.Font               = Enum.Font.Garamond
+                label.TextSize           = 15
+                label.TextTruncate       = Enum.TextTruncate.AtEnd
+                label.TextXAlignment     = Enum.TextXAlignment.Left
+                label.Parent             = toggleFrame
+
                 local toggleData = { Value = default, OnChangedCallbacks = { callback } }
                 RogueUI.Toggles[id] = toggleData
-                
+
                 local function set(state)
-                    toggleData.Value = state
-                    mark.Visible = state
-                    label.TextColor3 = state and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
-                    boxBorder.Color = state and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
-                    
+                    toggleData.Value  = state
+                    mark.Visible      = state
+                    label.TextColor3  = state and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
+                    boxBorder.Color   = state and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                     for _, cb in ipairs(toggleData.OnChangedCallbacks) do
                         task.spawn(cb, state)
                     end
                 end
-                
-                local function fire()
-                    playClick()
-                    set(not toggleData.Value)
-                end
-                
+
+                local function fire() playClick(); set(not toggleData.Value) end
+
                 box.MouseButton1Click:Connect(fire)
                 label.MouseButton1Click:Connect(fire)
-                
+
+                -- FIX: hover no box também, não só no label
+                box.MouseEnter:Connect(function()
+                    playHover()
+                    if not toggleData.Value then
+                        boxBorder.Color = RogueUI.Theme.BorderColor
+                    end
+                end)
+                box.MouseLeave:Connect(function()
+                    if not toggleData.Value then
+                        boxBorder.Color = RogueUI.Theme.BorderInactive
+                    end
+                end)
+
                 label.MouseEnter:Connect(function()
                     playHover()
                     if not toggleData.Value then
                         label.TextColor3 = RogueUI.Theme.TextActive
+                        boxBorder.Color  = RogueUI.Theme.BorderColor
                     end
                 end)
                 label.MouseLeave:Connect(function()
                     if not toggleData.Value then
                         label.TextColor3 = RogueUI.Theme.TextNormal
+                        boxBorder.Color  = RogueUI.Theme.BorderInactive
                     end
                 end)
-                
-                function toggleData:SetValue(state)
-                    set(state)
-                end
-                
-                function toggleData:OnChanged(cb)
-                    table.insert(toggleData.OnChangedCallbacks, cb)
-                end
-                
+
+                function toggleData:SetValue(state)  set(state) end
+                function toggleData:OnChanged(cb) table.insert(toggleData.OnChangedCallbacks, cb) end
+
                 return toggleData
             end
-            
+
+            -- ── Slider ───────────────────────────────────────────────────────
+
             function group_Self:AddSlider(id, sliderOptions)
-                local text = sliderOptions.Text or id
-                local min = sliderOptions.Min or 0
-                local max = sliderOptions.Max or 100
-                local default = sliderOptions.Default or min
+                local text     = sliderOptions.Text     or id
+                local min      = sliderOptions.Min      or 0
+                local max      = sliderOptions.Max      or 100
+                local default  = sliderOptions.Default  or min
                 local callback = sliderOptions.Callback or function() end
                 local rounding = sliderOptions.Rounding or 0
-                
+
                 local sliderFrame = Instance.new("Frame")
-                sliderFrame.Name = id .. "Slider"
-                sliderFrame.Size = UDim2.new(1, 0, 0, 30)
+                sliderFrame.Name               = id .. "Slider"
+                sliderFrame.Size               = UDim2.new(1, 0, 0, 30)
                 sliderFrame.BackgroundTransparency = 1
-                sliderFrame.Parent = content
-                
+                sliderFrame.Parent             = content
+
                 local label = Instance.new("TextLabel")
-                label.Name = "Label"
-                label.Size = UDim2.new(1, 0, 0, 14)
+                label.Size               = UDim2.new(1, 0, 0, 14)
                 label.BackgroundTransparency = 1
-                label.Text = text .. ": " .. tostring(default)
-                label.TextColor3 = RogueUI.Theme.TextNormal
-                label.Font = Enum.Font.Garamond
-                label.TextSize = 15
-                label.TextTruncate = Enum.TextTruncate.AtEnd
-                label.TextXAlignment = Enum.TextXAlignment.Left
-                label.Parent = sliderFrame
-                
+                label.Text               = text .. ": " .. tostring(default)
+                label.TextColor3         = RogueUI.Theme.TextNormal
+                label.Font               = Enum.Font.Garamond
+                label.TextSize           = 15
+                label.TextTruncate       = Enum.TextTruncate.AtEnd
+                label.TextXAlignment     = Enum.TextXAlignment.Left
+                label.Parent             = sliderFrame
+
                 local track = Instance.new("TextButton")
-                track.Name = "Track"
-                track.Size = UDim2.new(1, 0, 0, 4)
-                track.Position = UDim2.new(0, 0, 0, 20)
+                track.Name             = "Track"
+                track.Size             = UDim2.new(1, 0, 0, 4)
+                track.Position         = UDim2.new(0, 0, 0, 20)
                 track.BackgroundColor3 = RogueUI.Theme.MainBackground
-                track.Text = ""
-                track.BorderSizePixel = 0
-                track.Parent = sliderFrame
-                
+                track.Text             = ""
+                track.BorderSizePixel  = 0
+                track.Parent           = sliderFrame
+
                 local trackBorder = Instance.new("UIStroke")
                 trackBorder.Thickness = 1
-                trackBorder.Color = RogueUI.Theme.BorderInactive
-                trackBorder.Parent = track
-                
+                trackBorder.Color     = RogueUI.Theme.BorderInactive
+                trackBorder.Parent    = track
+
                 local fill = Instance.new("Frame")
-                fill.Name = "Fill"
-                fill.Size = UDim2.new((default - min) / (max - min), 0, 1, 0)
+                fill.Size             = UDim2.new((default - min) / (max - min), 0, 1, 0)
                 fill.BackgroundColor3 = RogueUI.Theme.BorderColor
-                fill.BorderSizePixel = 0
-                fill.Parent = track
-                
+                fill.BorderSizePixel  = 0
+                fill.Parent           = track
+
                 local knob = Instance.new("Frame")
-                knob.Name = "Knob"
-                knob.Size = UDim2.new(0, 8, 0, 10)
-                knob.Position = UDim2.new((default - min) / (max - min), -4, 0.5, -5)
+                knob.Size             = UDim2.new(0, 8, 0, 10)
+                knob.Position         = UDim2.new((default - min) / (max - min), -4, 0.5, -5)
                 knob.BackgroundColor3 = RogueUI.Theme.TextActive
-                knob.BorderSizePixel = 0
-                knob.Parent = track
-                
+                knob.BorderSizePixel  = 0
+                knob.Parent           = track
+
                 local sliderData = { Value = default, OnChangedCallbacks = { callback } }
                 RogueUI.Sliders[id] = sliderData
-                
+
                 local function set(val)
                     val = math.clamp(val, min, max)
                     if rounding == 0 then
@@ -652,111 +624,96 @@ function RogueUI:CreateWindow(options)
                     else
                         val = tonumber(string.format("%." .. rounding .. "f", val))
                     end
-                    
                     sliderData.Value = val
-                    label.Text = text .. ": " .. tostring(val)
-                    
-                    local pct = (val - min) / (max - min)
-                    fill.Size = UDim2.new(pct, 0, 1, 0)
-                    knob.Position = UDim2.new(pct, -4, 0.5, -5)
-                    
+                    label.Text       = text .. ": " .. tostring(val)
+                    local pct        = (val - min) / (max - min)
+                    fill.Size        = UDim2.new(pct, 0, 1, 0)
+                    knob.Position    = UDim2.new(pct, -4, 0.5, -5)
                     for _, cb in ipairs(sliderData.OnChangedCallbacks) do
                         task.spawn(cb, val)
                     end
                 end
-                
+
                 local dragging = false
                 local function updateDrag(input)
-                    local trackSize = track.AbsoluteSize.X
                     local relativeX = input.Position.X - track.AbsolutePosition.X
-                    local pct = math.clamp(relativeX / trackSize, 0, 1)
-                    local val = min + pct * (max - min)
-                    set(val)
+                    local pct       = math.clamp(relativeX / track.AbsoluteSize.X, 0, 1)
+                    set(min + pct * (max - min))
                 end
-                
+
                 addCleanupConnection(track.InputBegan:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
                         dragging = true
                         updateDrag(input)
                         playClick()
                     end
                 end))
-                
+
                 addCleanupConnection(UserInputService.InputEnded:Connect(function(input)
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    if input.UserInputType == Enum.UserInputType.MouseButton1
+                    or input.UserInputType == Enum.UserInputType.Touch then
                         dragging = false
                     end
                 end))
-                
+
                 addCleanupConnection(UserInputService.InputChanged:Connect(function(input)
-                    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch) then
                         updateDrag(input)
                     end
                 end))
-                
-                function sliderData:SetValue(val)
-                    set(val)
-                end
-                
-                function sliderData:OnChanged(cb)
-                    table.insert(sliderData.OnChangedCallbacks, cb)
-                end
-                
+
+                function sliderData:SetValue(val) set(val) end
+                function sliderData:OnChanged(cb) table.insert(sliderData.OnChangedCallbacks, cb) end
+
                 return sliderData
             end
-            
+
+            -- ── Dropdown ─────────────────────────────────────────────────────
+
             function group_Self:AddDropdown(id, dropdownOptions)
-                local text = dropdownOptions.Text or id
-                local values = dropdownOptions.Values or {}
-                local isMulti = dropdownOptions.Multi or false
-                local default = dropdownOptions.Default
+                local text     = dropdownOptions.Text     or id
+                local values   = dropdownOptions.Values   or {}
+                local isMulti  = dropdownOptions.Multi    or false
+                local default  = dropdownOptions.Default
                 local callback = dropdownOptions.Callback or function() end
-                
+
                 local dropdownFrame = Instance.new("Frame")
-                dropdownFrame.Name = id .. "Dropdown"
-                dropdownFrame.Size = UDim2.new(1, 0, 0, 38)
+                dropdownFrame.Name               = id .. "Dropdown"
+                dropdownFrame.Size               = UDim2.new(1, 0, 0, 38)
                 dropdownFrame.BackgroundTransparency = 1
-                dropdownFrame.Parent = content
-                
+                dropdownFrame.Parent             = content
+
                 local label = Instance.new("TextLabel")
-                label.Name = "Label"
-                label.Size = UDim2.new(1, 0, 0, 14)
+                label.Size               = UDim2.new(1, 0, 0, 14)
                 label.BackgroundTransparency = 1
-                label.Text = text
-                label.TextColor3 = RogueUI.Theme.TextNormal
-                label.Font = Enum.Font.Garamond
-                label.TextSize = 15
-                label.TextTruncate = Enum.TextTruncate.AtEnd
-                label.TextXAlignment = Enum.TextXAlignment.Left
-                label.Parent = dropdownFrame
-                
-                -- Selected state
+                label.Text               = text
+                label.TextColor3         = RogueUI.Theme.TextNormal
+                label.Font               = Enum.Font.Garamond
+                label.TextSize           = 15
+                label.TextTruncate       = Enum.TextTruncate.AtEnd
+                label.TextXAlignment     = Enum.TextXAlignment.Left
+                label.Parent             = dropdownFrame
+
                 local selectedState = {}
                 if isMulti then
                     if type(default) == "table" then
-                        for _, val in ipairs(default) do
-                            selectedState[val] = true
-                        end
+                        for _, val in ipairs(default) do selectedState[val] = true end
                     elseif default ~= nil then
                         selectedState[default] = true
                     end
                 else
                     selectedState[default or values[1]] = true
                 end
-                
+
                 local function getDisplayText()
                     if isMulti then
-                        local selectedList = {}
+                        local list = {}
                         for _, val in ipairs(values) do
-                            if selectedState[val] then
-                                table.insert(selectedList, tostring(val))
-                            end
+                            if selectedState[val] then table.insert(list, tostring(val)) end
                         end
-                        if #selectedList == 0 then
-                            return "Select..."
-                        else
-                            return table.concat(selectedList, ", ")
-                        end
+                        return #list > 0 and table.concat(list, ", ") or "Select..."
                     else
                         for val, active in pairs(selectedState) do
                             if active then return tostring(val) end
@@ -764,56 +721,51 @@ function RogueUI:CreateWindow(options)
                         return "Select..."
                     end
                 end
-                
+
                 local button = Instance.new("TextButton")
-                button.Name = "Button"
-                button.Size = UDim2.new(1, 0, 0, 20)
-                button.Position = UDim2.new(0, 0, 0, 18)
-                button.BackgroundColor3 = RogueUI.Theme.MainBackground
-                button.Text = getDisplayText()
-                button.TextColor3 = RogueUI.Theme.TextActive
-                button.Font = Enum.Font.Garamond
-                button.TextSize = 15
-                button.TextTruncate = Enum.TextTruncate.AtEnd
-                button.BorderSizePixel = 0
-                button.Parent = dropdownFrame
-                
+                button.Size               = UDim2.new(1, 0, 0, 20)
+                button.Position           = UDim2.new(0, 0, 0, 18)
+                button.BackgroundColor3   = RogueUI.Theme.MainBackground
+                button.Text               = getDisplayText()
+                button.TextColor3         = RogueUI.Theme.TextActive
+                button.Font               = Enum.Font.Garamond
+                button.TextSize           = 15
+                button.TextTruncate       = Enum.TextTruncate.AtEnd
+                button.BorderSizePixel    = 0
+                button.Parent             = dropdownFrame
+
                 local buttonBorder = Instance.new("UIStroke")
                 buttonBorder.Thickness = 1
-                buttonBorder.Color = RogueUI.Theme.BorderInactive
-                buttonBorder.Parent = button
-                
-                -- Expanded menu (overlay parented to ScreenGui for proper z-ordering)
+                buttonBorder.Color     = RogueUI.Theme.BorderInactive
+                buttonBorder.Parent    = button
+
                 local menu = Instance.new("Frame")
-                menu.Name = id .. "DropdownMenu"
-                menu.Size = UDim2.new(0, 0, 0, 0)
+                menu.Name             = id .. "DropdownMenu"
                 menu.BackgroundColor3 = RogueUI.Theme.GroupBackground
-                menu.BorderSizePixel = 0
-                menu.Visible = false
-                menu.ZIndex = 100
-                menu.Parent = screenGui
-                
+                menu.BorderSizePixel  = 0
+                menu.Visible          = false
+                menu.ZIndex           = 100
+                menu.Parent           = screenGui
+
                 local menuBorder = Instance.new("UIStroke")
                 menuBorder.Thickness = 1
-                menuBorder.Color = RogueUI.Theme.BorderColor
-                menuBorder.Parent = menu
-                
+                menuBorder.Color     = RogueUI.Theme.BorderColor
+                menuBorder.Parent    = menu
+
                 local menuScroll = Instance.new("ScrollingFrame")
-                menuScroll.Name = "Scroll"
-                menuScroll.Size = UDim2.new(1, 0, 1, 0)
+                menuScroll.Size               = UDim2.new(1, 0, 1, 0)
                 menuScroll.BackgroundTransparency = 1
-                menuScroll.BorderSizePixel = 0
+                menuScroll.BorderSizePixel    = 0
                 menuScroll.ScrollBarThickness = 3
                 menuScroll.ScrollBarImageColor3 = RogueUI.Theme.BorderColor
-                menuScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
-                menuScroll.ZIndex = 100
-                menuScroll.Parent = menu
-                
+                menuScroll.CanvasSize         = UDim2.new(0, 0, 0, 0)
+                menuScroll.ZIndex             = 100
+                menuScroll.Parent             = menu
+
                 local menuLayout = Instance.new("UIListLayout")
                 menuLayout.SortOrder = Enum.SortOrder.LayoutOrder
-                menuLayout.Parent = menuScroll
-                
-                -- Construct return hybrid value
+                menuLayout.Parent    = menuScroll
+
                 local function getCallbackValue()
                     if isMulti then
                         local result = {}
@@ -831,127 +783,102 @@ function RogueUI:CreateWindow(options)
                         return nil
                     end
                 end
-                
-                local dropdownData = { Value = getCallbackValue(), Values = values, OnChangedCallbacks = { callback } }
+
+                local dropdownData = {
+                    Value              = getCallbackValue(),
+                    Values             = values,
+                    OnChangedCallbacks = { callback },
+                }
                 RogueUI.Dropdowns[id] = dropdownData
-                
-                -- Position the overlay menu to appear below the button
+
                 local function positionMenu()
-                    local absPos = button.AbsolutePosition
+                    local absPos  = button.AbsolutePosition
                     local absSize = button.AbsoluteSize
                     menu.Position = UDim2.new(0, absPos.X, 0, absPos.Y + absSize.Y + 1)
-                    menu.Size = UDim2.new(0, absSize.X, 0, math.min(#dropdownData.Values * 20, 160))
+                    menu.Size     = UDim2.new(0, absSize.X, 0, math.min(#dropdownData.Values * 20, 160))
                     menuScroll.CanvasSize = UDim2.new(0, 0, 0, #dropdownData.Values * 20)
                 end
-                
+
                 local open = false
-                local positionConnection
-                
-                local dropdownInputConn
+
+                -- FIX: positionConnection gerenciada localmente, nunca vaza
+                local positionConn = nil
+
                 local function closeDropdown()
+                    if not open then return end
                     open = false
-                    menu.Visible = false
+                    menu.Visible   = false
                     buttonBorder.Color = RogueUI.Theme.BorderInactive
-                    if positionConnection then
-                        positionConnection:Disconnect()
-                        positionConnection = nil
-                    end
-                    if dropdownInputConn then
-                        dropdownInputConn:Disconnect()
-                        dropdownInputConn = nil
+                    if positionConn then
+                        positionConn:Disconnect()
+                        positionConn = nil
                     end
                 end
-                
-                table.insert(self_Window.CleanupConnections, closeDropdown)
-                
+
+                -- FIX: único listener global para fechar ao clicar fora —
+                --      registrado uma só vez, não a cada abertura
+                addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
+                    if not open then return end
+                    if input.UserInputType ~= Enum.UserInputType.MouseButton1
+                    and input.UserInputType ~= Enum.UserInputType.Touch then return end
+
+                    task.defer(function()
+                        if not open then return end
+                        local mousePos = UserInputService:GetMouseLocation()
+                        local menuPos  = menu.AbsolutePosition
+                        local menuSize = menu.AbsoluteSize
+                        local btnPos   = button.AbsolutePosition
+                        local btnSize  = button.AbsoluteSize
+
+                        local inMenu = mousePos.X >= menuPos.X and mousePos.X <= menuPos.X + menuSize.X
+                                   and mousePos.Y >= menuPos.Y and mousePos.Y <= menuPos.Y + menuSize.Y
+                        local inBtn  = mousePos.X >= btnPos.X  and mousePos.X <= btnPos.X  + btnSize.X
+                                   and mousePos.Y >= btnPos.Y  and mousePos.Y <= btnPos.Y  + btnSize.Y
+
+                        if not inMenu and not inBtn then closeDropdown() end
+                    end)
+                end))
+
+                -- closeDropdown registrado para Unload
+                addCleanupConnection(closeDropdown)
+
                 local function toggleMenu()
                     open = not open
                     if open then
                         positionMenu()
-                        positionConnection = RunService.Heartbeat:Connect(positionMenu)
-                        dropdownInputConn = addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
-                            if not open then return end
-                            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                                task.defer(function()
-                                    if open then
-                                        local mousePos = UserInputService:GetMouseLocation()
-                                        local menuPos = menu.AbsolutePosition
-                                        local menuSize = menu.AbsoluteSize
-                                        local btnPos = button.AbsolutePosition
-                                        local btnSize = button.AbsoluteSize
-                                        local inMenu = mousePos.X >= menuPos.X and mousePos.X <= menuPos.X + menuSize.X
-                                            and mousePos.Y >= menuPos.Y and mousePos.Y <= menuPos.Y + menuSize.Y
-                                        local inBtn = mousePos.X >= btnPos.X and mousePos.X <= btnPos.X + btnSize.X
-                                            and mousePos.Y >= btnPos.Y and mousePos.Y <= btnPos.Y + btnSize.Y
-                                        if not inMenu and not inBtn then
-                                            closeDropdown()
-                                        end
-                                    end
-                                end)
-                            end
-                        end))
+                        -- FIX: positionConn nunca acumula — é sempre nil aqui
+                        positionConn = RunService.Heartbeat:Connect(positionMenu)
                     else
-                        if positionConnection then
-                            positionConnection:Disconnect()
-                            positionConnection = nil
-                        end
-                        if dropdownInputConn then
-                            dropdownInputConn:Disconnect()
-                            dropdownInputConn = nil
+                        if positionConn then
+                            positionConn:Disconnect()
+                            positionConn = nil
                         end
                     end
-                    menu.Visible = open
+                    menu.Visible       = open
                     buttonBorder.Color = open and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                     playClick()
                 end
-                
-                -- Close dropdown when clicking outside
-                addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
-                    if not open then return end
-                    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                        -- Delay to let button click fire first
-                        task.defer(function()
-                            if open then
-                                local mousePos = UserInputService:GetMouseLocation()
-                                local menuPos = menu.AbsolutePosition
-                                local menuSize = menu.AbsoluteSize
-                                local btnPos = button.AbsolutePosition
-                                local btnSize = button.AbsoluteSize
-                                
-                                local inMenu = mousePos.X >= menuPos.X and mousePos.X <= menuPos.X + menuSize.X
-                                    and mousePos.Y >= menuPos.Y and mousePos.Y <= menuPos.Y + menuSize.Y
-                                local inBtn = mousePos.X >= btnPos.X and mousePos.X <= btnPos.X + btnSize.X
-                                    and mousePos.Y >= btnPos.Y and mousePos.Y <= btnPos.Y + btnSize.Y
-                                
-                                if not inMenu and not inBtn then
-                                    closeDropdown()
-                                end
-                            end
-                        end)
-                    end
-                end))
-                
+
                 button.MouseButton1Click:Connect(toggleMenu)
-                
+
                 local function populateOptions()
                     for _, child in ipairs(menuScroll:GetChildren()) do
                         if child:IsA("TextButton") then child:Destroy() end
                     end
-                    
-                    for i, optVal in ipairs(dropdownData.Values) do
+
+                    for _, optVal in ipairs(dropdownData.Values) do
                         local opt = Instance.new("TextButton")
-                        opt.Name = tostring(optVal)
-                        opt.Size = UDim2.new(1, 0, 0, 20)
+                        opt.Size             = UDim2.new(1, 0, 0, 20)
                         opt.BackgroundColor3 = RogueUI.Theme.GroupBackground
-                        opt.BorderSizePixel = 0
-                        opt.Text = tostring(optVal)
-                        opt.TextColor3 = selectedState[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
-                        opt.Font = Enum.Font.Garamond
-                        opt.TextSize = 15
-                        opt.TextTruncate = Enum.TextTruncate.AtEnd
-                        opt.ZIndex = 101
-                        opt.Parent = menuScroll
-                        
+                        opt.BorderSizePixel  = 0
+                        opt.Text             = tostring(optVal)
+                        opt.TextColor3       = selectedState[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
+                        opt.Font             = Enum.Font.Garamond
+                        opt.TextSize         = 15
+                        opt.TextTruncate     = Enum.TextTruncate.AtEnd
+                        opt.ZIndex           = 101
+                        opt.Parent           = menuScroll
+
                         opt.MouseEnter:Connect(function()
                             opt.TextColor3 = RogueUI.Theme.TextActive
                             playHover()
@@ -961,103 +888,94 @@ function RogueUI:CreateWindow(options)
                                 opt.TextColor3 = RogueUI.Theme.TextNormal
                             end
                         end)
-                        
+
                         opt.MouseButton1Click:Connect(function()
                             if isMulti then
                                 selectedState[optVal] = not selectedState[optVal]
-                                opt.TextColor3 = selectedState[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
-                                button.Text = getDisplayText()
+                                opt.TextColor3        = selectedState[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
+                                button.Text           = getDisplayText()
                                 playClick()
-                                
                                 local val = getCallbackValue()
                                 dropdownData.Value = val
-                                for _, cb in ipairs(dropdownData.OnChangedCallbacks) do
-                                    task.spawn(cb, val)
-                                end
+                                for _, cb in ipairs(dropdownData.OnChangedCallbacks) do task.spawn(cb, val) end
                             else
-                                selectedState = {}
+                                selectedState       = {}
                                 selectedState[optVal] = true
-                                button.Text = tostring(optVal)
+                                button.Text         = tostring(optVal)
                                 closeDropdown()
                                 populateOptions()
-                                
                                 dropdownData.Value = optVal
-                                for _, cb in ipairs(dropdownData.OnChangedCallbacks) do
-                                    task.spawn(cb, optVal)
-                                end
+                                for _, cb in ipairs(dropdownData.OnChangedCallbacks) do task.spawn(cb, optVal) end
                             end
                         end)
                     end
                 end
-                
+
                 populateOptions()
-                
+
                 function dropdownData:SetValue(val)
                     if isMulti then
                         selectedState = {}
                         if type(val) == "table" then
-                            for _, v in ipairs(val) do
-                                selectedState[v] = true
-                            end
+                            for _, v in ipairs(val) do selectedState[v] = true end
                         else
                             selectedState[val] = true
                         end
                     else
-                        selectedState = {}
+                        selectedState     = {}
                         selectedState[val] = true
                     end
-                    
                     button.Text = getDisplayText()
                     populateOptions()
-                    
                     local finalVal = getCallbackValue()
                     dropdownData.Value = finalVal
-                    for _, cb in ipairs(dropdownData.OnChangedCallbacks) do
-                        task.spawn(cb, finalVal)
-                    end
+                    for _, cb in ipairs(dropdownData.OnChangedCallbacks) do task.spawn(cb, finalVal) end
                 end
-                
+
                 function dropdownData:SetValues(newVals)
                     dropdownData.Values = newVals
                     populateOptions()
                 end
-                
+
                 function dropdownData:OnChanged(cb)
                     table.insert(dropdownData.OnChangedCallbacks, cb)
                 end
-                
+
                 return dropdownData
             end
-            
+
+            -- ── Label ────────────────────────────────────────────────────────
+
             function group_Self:AddLabel(text, isMultiLine)
                 local label = Instance.new("TextButton")
-                label.Name = "Label"
+                label.Name               = "Label"
                 label.BackgroundTransparency = 1
-                label.AutoButtonColor = false
-                label.Text = text
-                label.TextColor3 = RogueUI.Theme.TextNormal
-                label.Font = Enum.Font.Garamond
-                label.TextSize = 15
-                label.TextXAlignment = Enum.TextXAlignment.Left
-                label.Parent = content
-                
+                label.AutoButtonColor    = false
+                label.Text               = text
+                label.TextColor3         = RogueUI.Theme.TextNormal
+                label.Font               = Enum.Font.Garamond
+                label.TextSize           = 15
+                label.TextXAlignment     = Enum.TextXAlignment.Left
+                label.Parent             = content
+
                 local function calculateHeight(txt)
-                    local _, linesCount = string.gsub(txt, "\n", "")
-                    linesCount = linesCount + 1
-                    return linesCount * 17
+                    local _, n = string.gsub(txt, "\n", "")
+                    return (n + 1) * 17
                 end
-                
+
                 if isMultiLine then
-                    label.Size = UDim2.new(1, 0, 0, calculateHeight(text))
-                    label.TextWrapped = true
-                    label.TextYAlignment = Enum.TextYAlignment.Top
-                    label.RichText = true
+                    label.Size             = UDim2.new(1, 0, 0, calculateHeight(text))
+                    label.TextWrapped      = true
+                    label.TextYAlignment   = Enum.TextYAlignment.Top
+                    label.RichText         = true
                 else
-                    label.Size = UDim2.new(1, 0, 0, 16)
-                    label.TextTruncate = Enum.TextTruncate.AtEnd
+                    label.Size             = UDim2.new(1, 0, 0, 16)
+                    label.TextTruncate     = Enum.TextTruncate.AtEnd
                 end
-                
-                local label_Self = {}
+
+                local label_Self          = {}
+                local labelClickCallbacks = {}
+
                 function label_Self:SetText(newText)
                     label.Text = newText
                     if isMultiLine then
@@ -1065,22 +983,17 @@ function RogueUI:CreateWindow(options)
                     end
                 end
 
-                local labelClickCallbacks = {}
                 function label_Self:OnClick(callback)
                     if typeof(callback) ~= "function" then return self end
                     if #labelClickCallbacks == 0 then
                         label.Active = true
-                        label.MouseEnter:Connect(function()
-                            label.TextColor3 = RogueUI.Theme.TextActive
-                        end)
-                        label.MouseLeave:Connect(function()
-                            label.TextColor3 = RogueUI.Theme.TextNormal
-                        end)
+                        label.MouseEnter:Connect(function() label.TextColor3 = RogueUI.Theme.TextActive end)
+                        label.MouseLeave:Connect(function() label.TextColor3 = RogueUI.Theme.TextNormal end)
                         label.MouseButton1Click:Connect(function()
                             playClick()
                             for _, cb in ipairs(labelClickCallbacks) do
-                                local ok, err = pcall(cb)
-                                if not ok then warn("[RogueUI] Label OnClick error:", tostring(err)) end
+                                local ok2, err = pcall(cb)
+                                if not ok2 then warn("[RogueUI] Label OnClick error:", tostring(err)) end
                             end
                         end)
                     end
@@ -1088,283 +1001,254 @@ function RogueUI:CreateWindow(options)
                     return self
                 end
 
-                function label_Self:AddKeyPicker(id, options)
-                    local defaultKey = options.Default or "Insert"
-                    local keyData = { Value = typeof(defaultKey) == "EnumItem" and defaultKey or (Enum.KeyCode[defaultKey] or defaultKey), OnChangedCallbacks = {} }
+                function label_Self:AddKeyPicker(id, opts)
+                    local defaultKey = opts.Default or "Insert"
+                    local keyData = {
+                        Value              = typeof(defaultKey) == "EnumItem" and defaultKey
+                                            or (Enum.KeyCode[defaultKey] or defaultKey),
+                        OnChangedCallbacks = {},
+                    }
                     getgenv().Options[id] = keyData
-                    
-                    if id == "MenuKeybind" and self_Window then
+
+                    if id == "MenuKeybind" then
                         self_Window.ToggleKeybind = keyData
                     end
-                    
+
                     local pickerBtn = Instance.new("TextButton")
-                    pickerBtn.Name = id .. "KeyPicker"
-                    pickerBtn.Size = UDim2.new(0, 60, 0, 14)
-                    pickerBtn.Position = UDim2.new(1, -2, 0.5, 0)
-                    pickerBtn.AnchorPoint = Vector2.new(1, 0.5)
-                    pickerBtn.BackgroundColor3 = RogueUI.Theme.MainBackground
-                    pickerBtn.BorderSizePixel = 0
-                    local keyName = typeof(keyData.Value) == "EnumItem" and keyData.Value.Name or tostring(keyData.Value)
-                    pickerBtn.Text = "[" .. keyName .. "]"
-                    pickerBtn.TextColor3 = RogueUI.Theme.TextActive
-                    pickerBtn.Font = Enum.Font.Garamond
-                    pickerBtn.TextSize = 13
-                    pickerBtn.Parent = label
-                    
+                    pickerBtn.Size               = UDim2.new(0, 60, 0, 14)
+                    pickerBtn.Position           = UDim2.new(1, -2, 0.5, 0)
+                    pickerBtn.AnchorPoint        = Vector2.new(1, 0.5)
+                    pickerBtn.BackgroundColor3   = RogueUI.Theme.MainBackground
+                    pickerBtn.BorderSizePixel    = 0
+                    local keyName                = typeof(keyData.Value) == "EnumItem" and keyData.Value.Name or tostring(keyData.Value)
+                    pickerBtn.Text               = "[" .. keyName .. "]"
+                    pickerBtn.TextColor3         = RogueUI.Theme.TextActive
+                    pickerBtn.Font               = Enum.Font.Garamond
+                    pickerBtn.TextSize           = 13
+                    pickerBtn.Parent             = label
+
                     local pickerBorder = Instance.new("UIStroke")
                     pickerBorder.Thickness = 1
-                    pickerBorder.Color = RogueUI.Theme.BorderInactive
-                    pickerBorder.Parent = pickerBtn
-                    
+                    pickerBorder.Color     = RogueUI.Theme.BorderInactive
+                    pickerBorder.Parent    = pickerBtn
+
                     local listening = false
                     local conn
-                    
+
                     local function stopListening(newKey)
-                        listening = false
-                        pickerBtn.Text = "[" .. tostring(newKey.Name) .. "]"
+                        listening            = false
+                        pickerBtn.Text       = "[" .. tostring(newKey.Name) .. "]"
                         pickerBtn.TextColor3 = RogueUI.Theme.TextActive
-                        pickerBorder.Color = RogueUI.Theme.BorderInactive
-                        
-                        keyData.Value = newKey
-                        
-                        if conn then conn:Disconnect() conn = nil end
-                        
-                        -- Update main toggle if it is MenuKeybind
-                        if id == "MenuKeybind" and self_Window then
-                            self_Window.ToggleKeybind = keyData
-                        end
-                        
-                        if options.Callback then
-                            task.spawn(options.Callback, newKey)
-                        end
-                        for _, cb in ipairs(keyData.OnChangedCallbacks) do
-                            task.spawn(cb, newKey)
-                        end
+                        pickerBorder.Color   = RogueUI.Theme.BorderInactive
+                        keyData.Value        = newKey
+                        if conn then conn:Disconnect(); conn = nil end
+                        if id == "MenuKeybind" then self_Window.ToggleKeybind = keyData end
+                        if opts.Callback then task.spawn(opts.Callback, newKey) end
+                        for _, cb in ipairs(keyData.OnChangedCallbacks) do task.spawn(cb, newKey) end
                     end
-                    
+
                     pickerBtn.MouseButton1Click:Connect(function()
                         if listening then return end
                         playClick()
-                        listening = true
-                        pickerBtn.Text = "[...]"
+                        listening            = true
+                        pickerBtn.Text       = "[...]"
                         pickerBtn.TextColor3 = RogueUI.Theme.TextNormal
-                        pickerBorder.Color = RogueUI.Theme.BorderColor
-                        
+                        pickerBorder.Color   = RogueUI.Theme.BorderColor
                         conn = addCleanupConnection(UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType == Enum.UserInputType.Keyboard then
                                 stopListening(input.KeyCode)
                             end
                         end))
                     end)
-                    
-                    function keyData:SetValue(newKey)
-                        stopListening(newKey)
-                    end
-                    
-                    function keyData:OnChanged(cb)
-                        table.insert(keyData.OnChangedCallbacks, cb)
-                    end
-                    
+
+                    function keyData:SetValue(newKey) stopListening(newKey) end
+                    function keyData:OnChanged(cb) table.insert(keyData.OnChangedCallbacks, cb) end
+
                     return keyData
                 end
-                function label_Self:AddColorPicker(id, options)
-                    local defaultColor = options.Default or Color3.fromRGB(255, 255, 255)
-                    local callback = options.Callback or function() end
-                    
+
+                function label_Self:AddColorPicker(id, opts)
+                    local defaultColor = opts.Default  or Color3.fromRGB(255, 255, 255)
+                    local callback     = opts.Callback or function() end
+
                     local pickerBtn = Instance.new("TextButton")
-                    pickerBtn.Name = id .. "ColorPicker"
-                    pickerBtn.Size = UDim2.new(0, 14, 0, 14)
-                    pickerBtn.Position = UDim2.new(1, -2, 0.5, 0)
-                    pickerBtn.AnchorPoint = Vector2.new(1, 0.5)
+                    pickerBtn.Size             = UDim2.new(0, 14, 0, 14)
+                    pickerBtn.Position         = UDim2.new(1, -2, 0.5, 0)
+                    pickerBtn.AnchorPoint      = Vector2.new(1, 0.5)
                     pickerBtn.BackgroundColor3 = defaultColor
-                    pickerBtn.BorderSizePixel = 0
-                    pickerBtn.Text = ""
-                    pickerBtn.Parent = label
-                    
+                    pickerBtn.BorderSizePixel  = 0
+                    pickerBtn.Text             = ""
+                    pickerBtn.Parent           = label
+
                     local pickerBorder = Instance.new("UIStroke")
                     pickerBorder.Thickness = 1
-                    pickerBorder.Color = RogueUI.Theme.BorderInactive
-                    pickerBorder.Parent = pickerBtn
-                    
-                    -- Color menu overlay
+                    pickerBorder.Color     = RogueUI.Theme.BorderInactive
+                    pickerBorder.Parent    = pickerBtn
+
                     local menu = Instance.new("Frame")
-                    menu.Name = "Menu"
-                    menu.Size = UDim2.new(0, 84, 0, 56)
-                    menu.Position = UDim2.new(1, 0, 1, 2)
-                    menu.AnchorPoint = Vector2.new(1, 0)
+                    menu.Size             = UDim2.new(0, 84, 0, 56)
+                    menu.Position         = UDim2.new(1, 0, 1, 2)
+                    menu.AnchorPoint      = Vector2.new(1, 0)
                     menu.BackgroundColor3 = RogueUI.Theme.GroupBackground
-                    menu.BorderSizePixel = 0
-                    menu.Visible = false
-                    menu.ZIndex = 200
-                    menu.Parent = pickerBtn
-                    
+                    menu.BorderSizePixel  = 0
+                    menu.Visible          = false
+                    menu.ZIndex           = 200
+                    menu.Parent           = pickerBtn
+
                     local menuBorder = Instance.new("UIStroke")
                     menuBorder.Thickness = 1
-                    menuBorder.Color = RogueUI.Theme.BorderColor
-                    menuBorder.Parent = menu
-                    
+                    menuBorder.Color     = RogueUI.Theme.BorderColor
+                    menuBorder.Parent    = menu
+
                     local grid = Instance.new("UIGridLayout")
-                    grid.CellSize = UDim2.new(0, 24, 0, 24)
+                    grid.CellSize    = UDim2.new(0, 24, 0, 24)
                     grid.CellPadding = UDim2.new(0, 4, 0, 4)
-                    grid.SortOrder = Enum.SortOrder.LayoutOrder
-                    grid.Parent = menu
-                    
+                    grid.SortOrder   = Enum.SortOrder.LayoutOrder
+                    grid.Parent      = menu
+
                     local padding = Instance.new("UIPadding")
-                    padding.PaddingLeft = UDim.new(0, 4)
-                    padding.PaddingRight = UDim.new(0, 4)
-                    padding.PaddingTop = UDim.new(0, 4)
+                    padding.PaddingLeft   = UDim.new(0, 4)
+                    padding.PaddingRight  = UDim.new(0, 4)
+                    padding.PaddingTop    = UDim.new(0, 4)
                     padding.PaddingBottom = UDim.new(0, 4)
-                    padding.Parent = menu
-                    
+                    padding.Parent        = menu
+
                     local PRESETS = {
-                        Color3.fromRGB(255, 255, 255), -- White
-                        Color3.fromRGB(205, 170, 105), -- Gold
-                        Color3.fromRGB(130, 130, 132), -- Gray
-                        Color3.fromRGB(180, 50, 50),   -- Goth Red
-                        Color3.fromRGB(0, 200, 100),   -- Green
-                        Color3.fromRGB(80, 180, 255)   -- Cyan/Blue
+                        Color3.fromRGB(255, 255, 255),
+                        Color3.fromRGB(205, 170, 105),
+                        Color3.fromRGB(130, 130, 132),
+                        Color3.fromRGB(180, 50, 50),
+                        Color3.fromRGB(0, 200, 100),
+                        Color3.fromRGB(80, 180, 255),
                     }
-                    
+
                     local colorPickerData = { Value = defaultColor, OnChangedCallbacks = { callback } }
                     getgenv().Options[id] = colorPickerData
-                    
+
                     local open = false
                     pickerBtn.MouseButton1Click:Connect(function()
-                        open = not open
+                        open         = not open
                         menu.Visible = open
                         pickerBorder.Color = open and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                         playClick()
                     end)
-                    
+
                     local function set(color)
-                        colorPickerData.Value = color
+                        colorPickerData.Value      = color
                         pickerBtn.BackgroundColor3 = color
-                        for _, cb in ipairs(colorPickerData.OnChangedCallbacks) do
-                            task.spawn(cb, color)
-                        end
+                        for _, cb in ipairs(colorPickerData.OnChangedCallbacks) do task.spawn(cb, color) end
                     end
-                    
+
                     for i, color in ipairs(PRESETS) do
                         local btn = Instance.new("TextButton")
-                        btn.Name = "Color_" .. tostring(i)
-                        btn.Text = ""
+                        btn.Text             = ""
                         btn.BackgroundColor3 = color
-                        btn.BorderSizePixel = 0
-                        btn.ZIndex = 201
-                        btn.Parent = menu
-                        
+                        btn.BorderSizePixel  = 0
+                        btn.ZIndex           = 201
+                        btn.Parent           = menu
+
                         local btnBorder = Instance.new("UIStroke")
                         btnBorder.Thickness = 1
-                        btnBorder.Color = RogueUI.Theme.BorderInactive
-                        btnBorder.Parent = btn
-                        
-                        btn.MouseEnter:Connect(function()
-                            btnBorder.Color = RogueUI.Theme.BorderColor
-                        end)
-                        btn.MouseLeave:Connect(function()
-                            btnBorder.Color = RogueUI.Theme.BorderInactive
-                        end)
+                        btnBorder.Color     = RogueUI.Theme.BorderInactive
+                        btnBorder.Parent    = btn
+
+                        btn.MouseEnter:Connect(function()  btnBorder.Color = RogueUI.Theme.BorderColor   end)
+                        btn.MouseLeave:Connect(function()  btnBorder.Color = RogueUI.Theme.BorderInactive end)
                         btn.MouseButton1Click:Connect(function()
                             set(color)
-                            open = false
+                            open         = false
                             menu.Visible = false
                             pickerBorder.Color = RogueUI.Theme.BorderInactive
                             playClick()
                         end)
                     end
-                    
-                    function colorPickerData:SetValue(color)
-                        set(color)
-                    end
-                    
-                    function colorPickerData:SetValueRGB(color)
-                        set(color)
-                    end
-                    
-                    function colorPickerData:OnChanged(cb)
-                        table.insert(colorPickerData.OnChangedCallbacks, cb)
-                    end
-                    
+
+                    function colorPickerData:SetValue(color)    set(color) end
+                    function colorPickerData:SetValueRGB(color) set(color) end
+                    function colorPickerData:OnChanged(cb) table.insert(colorPickerData.OnChangedCallbacks, cb) end
+
                     return colorPickerData
                 end
+
                 return label_Self
             end
-            
+
+            -- ── Button ───────────────────────────────────────────────────────
+
             function group_Self:AddButton(text, callback)
                 local btn = Instance.new("TextButton")
-                btn.Name = "Button"
-                btn.Size = UDim2.new(1, 0, 0, 20)
+                btn.Size             = UDim2.new(1, 0, 0, 20)
                 btn.BackgroundColor3 = RogueUI.Theme.MainBackground
-                btn.BorderSizePixel = 0
-                btn.Text = text
-                btn.TextColor3 = RogueUI.Theme.TextNormal
-                btn.Font = Enum.Font.Garamond
-                btn.TextSize = 15
-                btn.TextTruncate = Enum.TextTruncate.AtEnd
-                btn.Parent = content
-                
+                btn.BorderSizePixel  = 0
+                btn.Text             = text
+                btn.TextColor3       = RogueUI.Theme.TextNormal
+                btn.Font             = Enum.Font.Garamond
+                btn.TextSize         = 15
+                btn.TextTruncate     = Enum.TextTruncate.AtEnd
+                btn.Parent           = content
+
                 local btnBorder = Instance.new("UIStroke")
                 btnBorder.Thickness = 1
-                btnBorder.Color = RogueUI.Theme.BorderInactive
-                btnBorder.Parent = btn
-                
+                btnBorder.Color     = RogueUI.Theme.BorderInactive
+                btnBorder.Parent    = btn
+
                 btn.MouseEnter:Connect(function()
                     btn.TextColor3 = RogueUI.Theme.TextActive
                     btnBorder.Color = RogueUI.Theme.BorderColor
                     playHover()
                 end)
                 btn.MouseLeave:Connect(function()
-                    btn.TextColor3 = RogueUI.Theme.TextNormal
+                    btn.TextColor3  = RogueUI.Theme.TextNormal
                     btnBorder.Color = RogueUI.Theme.BorderInactive
                 end)
                 btn.MouseButton1Click:Connect(function()
                     playClick()
-                    callback()
+                    local ok2, err = pcall(callback)
+                    if not ok2 then warn("[RogueUI] Button callback error:", tostring(err)) end
                 end)
-                
+
                 return btn
             end
-            
+
             return group_Self
         end
-        
+
         function tabData:AddLeftGroupbox(groupTitle)
             return addGroupbox(leftColumn, groupTitle)
         end
-        
+
         function tabData:AddRightGroupbox(groupTitle)
             return addGroupbox(rightColumn, groupTitle)
         end
-        
+
         self_Window.Tabs[tabName] = tabData
         return tabData
     end
-    
+
+    -- ── Unload ───────────────────────────────────────────────────────────────
+
     function self_Window:Unload()
         playClick()
         if self_Window.OnUnload then
-            local ok, err = pcall(self_Window.OnUnload)
-            if not ok then warn("[RogueUI] Error in OnUnload:", tostring(err)) end
+            local ok2, err = pcall(self_Window.OnUnload)
+            if not ok2 then warn("[RogueUI] Error in OnUnload:", tostring(err)) end
         end
         for _, conn in ipairs(self_Window.CleanupConnections) do
             if type(conn) == "function" then
                 pcall(conn)
-            elseif conn.Disconnect then
+            elseif conn and conn.Disconnect then
                 pcall(function() conn:Disconnect() end)
             end
         end
-        if screenGui then
-            screenGui:Destroy()
-        end
+        table.clear(self_Window.CleanupConnections)
+        if screenGui then screenGui:Destroy() end
         getgenv().BrazilHubLoaded = nil
     end
-    
+
     return self_Window
 end
 
--- Compatibility keybind handling wrapper
 function RogueUI:AddKeyPicker(id, options)
-    -- Simply map it to a callback toggle or print since it's built-in in the CreateWindow wrapper
     print("[RogueUI] KeyPicker set for", id, options.Default)
 end
 
