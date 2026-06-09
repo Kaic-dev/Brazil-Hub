@@ -737,18 +737,20 @@ local function createCombatTab(combatTab, fovManager)
         Min = 5, Max = 50, Rounding = 0, Callback = UICallbacks.onStudsBehindMaxChanged,
     })
     autoAimGroup:AddDropdown("AutoAimTools", {
-        Values   = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
-        Default  = 1,
-        Multi    = true,
-        Text     = "Auto-Aim Tools",
-        Callback = function(selected)
-            local clean = {}
-            for _, name in ipairs(selected) do
+    Values   = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+    Default  = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+    Multi    = true,
+    Text     = "Auto-Aim Tools",
+    Callback = function(selected)
+        local clean = {}
+        for name, state in pairs(selected) do
+            if state then
                 clean[#clean+1] = name:gsub(" %[Equipped%]$",""):gsub(" %[Backpack%]$","")
             end
-            UICallbacks.onAutoAimToolsChanged(clean)
-        end,
-    })
+        end
+        UICallbacks.onAutoAimToolsChanged(clean)
+    end,
+})
 
     ModuleInstances.autoAim:setRange(CONFIG.AUTO_AIM.DEFAULT_RANGE)
     ModuleInstances.autoAim:setTimeToHit(CONFIG.AUTO_AIM.DEFAULT_TIME_TO_HIT)
