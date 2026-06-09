@@ -434,11 +434,11 @@ function TrinketESP:enable()
     -- Conexões sem throttling - detecção imediata
     self._connectionManager:add(Workspace.ChildAdded:Connect(function(obj)
         self:onChildAdded(obj)
-    end))
+    end), "Workspace.ChildAdded")
     
     self._connectionManager:add(Workspace.ChildRemoved:Connect(function(obj)
         self:onChildRemoved(obj)
-    end))
+    end), "Workspace.ChildRemoved")
 end
 
 function TrinketESP:disable()
