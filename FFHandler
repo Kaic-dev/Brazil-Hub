@@ -340,11 +340,11 @@ function FFDetector:registerPlayer(player)
     
     self._connMgr:add(player.CharacterAdded:Connect(function(character)
         self:registerCharacterFF(character)
-    end))
+    end), "player.CharacterAdded")
     
     self._connMgr:add(player.CharacterRemoving:Connect(function(character)
         self:clearCharacterData(character)
-    end))
+    end), "player.CharacterRemoving")
 end
 
 -- Função de atualização crítica - máxima otimização
@@ -386,16 +386,16 @@ function FFDetector:enable()
     -- Conexões de eventos
     self._connMgr:add(Players.PlayerAdded:Connect(function(player)
         self:registerPlayer(player)
-    end))
+    end), "Players.PlayerAdded")
     self._connMgr:add(Players.PlayerRemoving:Connect(function(player)
         if player.Character then
             self:clearCharacterData(player.Character)
         end
-    end))
+    end), "Players.PlayerRemoving")
     -- Usa Heartbeat ao invés de RenderStepped para aliviar FPS
     self._connMgr:add(RunService.Heartbeat:Connect(function()
         self:updateBillboards()
-    end))
+    end), "RunService.Heartbeat")
 end
 
 function FFDetector:disable()
