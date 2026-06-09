@@ -7,7 +7,7 @@ local Config = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-d
 local FFBillboardRenderer = {}
 FFBillboardRenderer.__index = FFBillboardRenderer
 
-local adorneeCache = {}
+local adorneeCache = setmetatable({}, {__mode = "k"})
 
 local function getBestAdornee(character)
 	local cached = adorneeCache[character]
@@ -34,12 +34,15 @@ function FFBillboardRenderer.new()
 	return self
 end
 
+local Utils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService"))()
+local utils = Utils.new()
+
 function FFBillboardRenderer:getFFColor(timeLeft)
-	return Color3.fromRGB(43, 255, 138)
+	return utils:getForceFieldColor(timeLeft)
 end
 
-function FFBillboardRenderer:create(character, ff, timeLeft)
-	if not character or not ff then return end
+function FFBillboardRenderer:create(character, ff, startTime)
+	if not character or not ff or not startTime then return end
 
 	local data = self.billboards[character]
 	local billboard, label
@@ -68,7 +71,9 @@ function FFBillboardRenderer:create(character, ff, timeLeft)
 
 		billboard.Parent = character
 	end
-
+	
+	local elapsed = os.clock() - startTime
+	local timeLeft = math.max(0, Config.FF.Duration - elapsed)
 	local formattedText = string.format(Config.Text.Format, timeLeft)
 	local color = self:getFFColor(timeLeft)
 
