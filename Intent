@@ -259,9 +259,9 @@ local function setupPlayerEventConnections()
         local characterAddedConnection = player.CharacterAdded:Connect(function()
             createPlayerBillboard(player)
         end)
-        connectionMgr:add(characterAddedConnection)
+        connectionMgr:add(characterAddedConnection, "player.CharacterAdded")
     end)
-    connectionMgr:add(playerAddedConnection)
+    connectionMgr:add(playerAddedConnection, "Players.PlayerAdded")
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= Players.LocalPlayer then
             local characterAddedConnection = player.CharacterAdded:Connect(function()
