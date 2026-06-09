@@ -37,13 +37,16 @@ end
 
 -- Adiciona uma conexão existente ao manager
 -- @param conn A conexão a ser adicionada (deve ser uma RBXScriptConnection)
-function ConnectionManager:add(conn)
+function ConnectionManager:add(conn, name)
     if typeof(conn) ~= "RBXScriptConnection" then
         warn("Tentativa de adicionar um objeto que não é uma RBXScriptConnection")
         return
     end
     if not self._conns[conn] then
-        self._conns[conn] = true
+        self._conns[conn] = {
+            name = name or tostring(conn),
+            conn = conn
+        }
     end
 end
 
@@ -60,7 +63,7 @@ end
 
 -- Desconecta todas as conexões e limpa a lista
 function ConnectionManager:disconnectAll()
-    for conn, _ in pairs(self._conns) do
+    for conn, record in pairs(self._conns) do
         if conn.Connected then
             conn:Disconnect()
         end
@@ -76,6 +79,19 @@ function ConnectionManager:count()
         count = count + 1
     end
     return count
+end
+
+-- Retorna detalhes das conexões gerenciadas
+-- @return Tabela de registros com campos name e connected
+function ConnectionManager:getDetails()
+    local details = {}
+    for conn, record in pairs(self._conns) do
+        table.insert(details, {
+            name = record.name or tostring(conn),
+            connected = conn.Connected
+        })
+    end
+    return details
 end
 
 return ConnectionManager
