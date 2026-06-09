@@ -5,7 +5,7 @@ local Players = game:GetService('Players')
 local RunService = game:GetService('RunService')
 
 -- Cache de serviços e funções críticas
-local getTime = tick
+local getTime = os.clock  -- era tick, que retorna Unix timestamp (bilhões de segundos)
 local mathMax = math.max
 local mathFloor = math.floor
 local stringFormat = string.format
@@ -62,7 +62,7 @@ local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/K
 local function ensureStartTime(ff)
     local startTime = ff:GetAttribute("StartTime")
     if not startTime then
-        startTime = getTime()
+        startTime = os.clock()
         ff:SetAttribute("StartTime", startTime)
     end
     return startTime
