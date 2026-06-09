@@ -1063,6 +1063,30 @@ function RogueUI:CreateWindow(options)
                         label.Size = UDim2.new(1, 0, 0, calculateHeight(newText))
                     end
                 end
+
+                local labelClickCallbacks = {}
+                function label_Self:OnClick(callback)
+                    if typeof(callback) ~= "function" then return self end
+                    if #labelClickCallbacks == 0 then
+                        label.Active = true
+                        label.MouseEnter:Connect(function()
+                            label.TextColor3 = RogueUI.Theme.TextActive
+                        end)
+                        label.MouseLeave:Connect(function()
+                            label.TextColor3 = RogueUI.Theme.TextNormal
+                        end)
+                        label.MouseButton1Click:Connect(function()
+                            playClick()
+                            for _, cb in ipairs(labelClickCallbacks) do
+                                local ok, err = pcall(cb)
+                                if not ok then warn("[RogueUI] Label OnClick error:", tostring(err)) end
+                            end
+                        end)
+                    end
+                    table.insert(labelClickCallbacks, callback)
+                    return self
+                end
+
                 function label_Self:AddKeyPicker(id, options)
                     local defaultKey = options.Default or "Insert"
                     local keyData = { Value = typeof(defaultKey) == "EnumItem" and defaultKey or (Enum.KeyCode[defaultKey] or defaultKey), OnChangedCallbacks = {} }
