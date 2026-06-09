@@ -1202,26 +1202,86 @@ local function createMiscTab(miscTab)
     
     -- Performance Monitor
     local performanceLabel = connectionsGroup:AddLabel('Performance: disabled')
+    local connectionDetailsLabel
     if PerformanceMonitor then
         local perfMonitor = PerformanceMonitor.new()
         perfMonitor:setLabel(performanceLabel)
 
+        local memoryKickEnabled = false
+        local memoryThreshold = 3000
+        local memoryTriggered = false
+        local memoryAccumulatedTime = 0
+        local memoryHoldTime = 2.0
+
         connectionsGroup:AddToggle('EnablePerformanceMonitor', {
             Text = 'Performance Monitor',
             Default = false,
-            Tooltip = 'Monitor FPS and performance metrics',
+            Tooltip = 'Monitora FPS e uso de memória',
             Callback = function(enabled)
                 if enabled then
                     perfMonitor:start()
                 else
                     perfMonitor:stop()
                     performanceLabel:SetText('Performance: disabled')
+                    memoryTriggered = false
+                    memoryAccumulatedTime = 0
                 end
             end
         })
+
+        connectionsGroup:AddToggle('EnableMemoryAutoKick', {
+            Text = 'Kick on high memory',
+            Default = false,
+            Tooltip = 'Kick local quando uso de memória exceder o limite configurado',
+            Callback = function(enabled)
+                memoryKickEnabled = enabled
+                memoryTriggered = false
+                memoryAccumulatedTime = 0
+            end
+        })
+
+        connectionsGroup:AddSlider('PerformanceMemoryKickThreshold', {
+            Text = 'Memory kick threshold (MB)',
+            Min = 500,
+            Max = 8000,
+            Default = memoryThreshold,
+            Rounding = 0,
+            Callback = function(value)
+                memoryThreshold = value
+            end
+        })
+
+        local function kickForHighMemory(dt)
+            if not memoryKickEnabled or not perfMonitor.isEnabled then
+                return
+            end
+
+            local memoryUsage = perfMonitor:getMemoryUsage()
+            if memoryUsage > 0 and memoryUsage >= memoryThreshold then
+                memoryAccumulatedTime = memoryAccumulatedTime + (dt or 0)
+            else
+                memoryAccumulatedTime = 0
+                memoryTriggered = false
+            end
+
+            if memoryAccumulatedTime >= memoryHoldTime and not memoryTriggered then
+                memoryTriggered = true
+                if connectionDetailsLabel then
+                    connectionDetailsLabel:SetText(string.format('Memória alta: %.1f MB ≥ %d MB por %.1fs. Kick ativado.', memoryUsage, memoryThreshold, memoryHoldTime))
+                end
+                local player = game:GetService('Players').LocalPlayer
+                if player and player.Parent then
+                    player:Kick('Brazil Hub: High memory usage detected (' .. string.format('%.1f MB', memoryUsage) .. ')')
+                end
+            end
+        end
+
+        connMgr:add(game:GetService('RunService').Heartbeat:Connect(function(dt)
+            kickForHighMemory(dt)
+        end))
     end
 
-    local connectionDetailsLabel = connectionsGroup:AddLabel('Clique em uma conexão para ver detalhes', true)
+    connectionDetailsLabel = connectionsGroup:AddLabel('Clique em uma conexão para ver detalhes', true)
     local function getConnectionInfo(name, manager)
         if not manager then
             return string.format('%s não está carregado ou não possui ConnectionManager.', name)
