@@ -2,342 +2,233 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
-local Debris = game:GetService("Debris")
 
-local LIVE_FOLDER = Workspace:WaitForChild("Live", 5)
 local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-local RemoteFunction
-
-if game.PlaceId == 14341521240 then
-    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-        if obj:IsA("RemoteFunction") and obj.Name == "" then
-            RemoteFunction = obj
-            break
-        end
-    end
-else
-    local requests = ReplicatedStorage:WaitForChild("Requests", 5)
-    if requests then
-        RemoteFunction = requests:WaitForChild("GetMouse", 5)
-    end
-end
+local Camera = Workspace.CurrentCamera
 
 local AutoAim = {}
 AutoAim.__index = AutoAim
 
-local cos, deg, acos, random = math.cos, math.deg, math.acos, math.random
-local Vector3new, Vector2new = Vector3.new, Vector2.new
-
 function AutoAim.new()
-    return setmetatable({
-        enabled = false,
-        maxRange = 200,
-        timeToHit = 0.15,
-        toolNames = {Fimbulvetr=true, Perflora=true, Armis=true, Grapple=true, Percutiens=true, Inferi=true},
-        studsBehindMin = 20,
-        studsBehindMax = 30,
-        fovMax = 20,
-        targetHistory = {},
-        historyMaxSize = 10
-    }, AutoAim)
+    local self = setmetatable({}, AutoAim)
+
+    self.enabled = false
+    self.maxRange = 200
+    self.fovMax = 20
+
+    self.remote = nil
+    self.mouse = nil
+
+    self._heartbeat = nil
+    self._invokeCount = 0
+
+    return self
 end
 
-function AutoAim:setRange(range) self.maxRange = range end
-function AutoAim:setTimeToHit(time) self.timeToHit = time end
-function AutoAim:setFOV(fov) self.fovMax = fov end
-function AutoAim:setStudsBehindRange(min, max) self.studsBehindMin, self.studsBehindMax = min, max end
-
-function AutoAim:updateTargetHistory(target)
-    if not target then return end
-
-    local hrp = target:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local currentTime = tick()
-    local currentPos = hrp.Position
-    local currentVel = hrp.Velocity
-
-    if not self.targetHistory[target] then
-        self.targetHistory[target] = {}
+function AutoAim:getRemote()
+    if self.remote then
+        return self.remote
     end
 
-    local history = self.targetHistory[target]
+    local requests = ReplicatedStorage:FindFirstChild("Requests")
 
-    table.insert(history, {
-        time = currentTime,
-        position = currentPos,
-        velocity = currentVel
-    })
-
-    while #history > self.historyMaxSize do
-        table.remove(history, 1)
-    end
-end
-
-function AutoAim:calculateMovementPrediction(target, predictionTime)
-    -- FIX #4: Validação robusta antes de qualquer operação
-    if not target or not target.Parent then
+    if not requests then
+        warn("[AutoAim] Requests not found")
         return nil
     end
 
-    local hrp = target:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
+    local remote = requests:FindFirstChild("GetMouse")
 
-    local history = self.targetHistory[target]
-
-    if not history or #history < 2 then
-        -- Predição simples por velocidade atual
-        return hrp.Position + hrp.Velocity * predictionTime
+    if not remote then
+        warn("[AutoAim] GetMouse not found")
+        return nil
     end
 
-    local totalVelocity = Vector3.new(0, 0, 0)
-    local velocityCount = 0
+    self.remote = remote
 
-    for i = 2, #history do
-        local timeDiff = history[i].time - history[i-1].time
-        if timeDiff > 0 then
-            local velocity = (history[i].position - history[i-1].position) / timeDiff
-            totalVelocity = totalVelocity + velocity
-            velocityCount = velocityCount + 1
-        end
-    end
-
-    if velocityCount > 0 then
-        local averageVelocity = totalVelocity / velocityCount
-        local currentPos = history[#history].position
-        local predictedPos = currentPos + averageVelocity * predictionTime
-        predictedPos = predictedPos + Vector3.new(0, -2, 0)
-        return predictedPos
-    else
-        return hrp.Position + hrp.Velocity * predictionTime
-    end
+    return remote
 end
 
-function AutoAim:cleanupTargetHistory()
-    -- FIX #5: Coleta chaves primeiro para evitar modificar a tabela durante iteração
-    local toRemove = {}
-    for target, _ in pairs(self.targetHistory) do
-        if not target.Parent then
-            table.insert(toRemove, target)
-        end
-    end
-    for _, target in ipairs(toRemove) do
-        self.targetHistory[target] = nil
-    end
+function AutoAim:updateMouse()
+    self.mouse = LocalPlayer:GetMouse()
 end
 
-function AutoAim:setTools(toolTable)
-    if type(toolTable) == "table" then
-        if toolTable[1] then
-            local hash = {}
-            for i = 1, #toolTable do hash[toolTable[i]] = true end
-            self.toolNames = hash
-        else
-            self.toolNames = toolTable
-        end
-    end
+function AutoAim:getCharacter()
+    return LocalPlayer.Character
 end
 
-function AutoAim:getBestNPC(localChar)
-    local hrp = localChar:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local camera = Workspace.CurrentCamera
-    local mouseRay = camera:ScreenPointToRay(Mouse.X, Mouse.Y)
-    local mouseDir = mouseRay.Direction
-    local camPos = camera.CFrame.Position
-    local fovHalf = self.fovMax * 0.5
-
-    if not LIVE_FOLDER then
-        LIVE_FOLDER = Workspace:FindFirstChild("Live") or Workspace:WaitForChild("Live", 1)
+function AutoAim:getHRP(character)
+    if not character then
+        return nil
     end
-    if not LIVE_FOLDER then return nil end
 
-    -- FIX #2: Validar que mouseDir não é vetor zero
-    if mouseDir.Magnitude < 0.001 then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
 
-    local closestNPC, minAngle = nil, fovHalf
-    local children = LIVE_FOLDER:GetChildren()
+function AutoAim:isValidTarget(model)
+    if not model then
+        return false
+    end
+
+    if not model.Parent then
+        return false
+    end
+
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+
+    if not humanoid then
+        return false
+    end
+
+    if humanoid.Health <= 0 then
+        return false
+    end
+
+    return true
+end
+
+function AutoAim:getLiveFolder()
+    return Workspace:FindFirstChild("Live")
+end
+
+function AutoAim:getClosestTarget()
+    local character = self:getCharacter()
+
+    if not character then
+        return nil
+    end
+
+    local hrp = self:getHRP(character)
+
+    if not hrp then
+        return nil
+    end
+
+    local liveFolder = self:getLiveFolder()
+
+    if not liveFolder then
+        return nil
+    end
+
+    local closest = nil
+    local closestDistance = self.maxRange
+
+    local children = liveFolder:GetChildren()
 
     for i = 1, #children do
         local model = children[i]
-        if model ~= localChar then
-            local head = model:FindFirstChild("Head")
-            if head and not model:FindFirstChild("Knocked") then
-                local headPos = head.Position
-                local _, onScreen = camera:WorldToViewportPoint(headPos)
-                if onScreen then
-                    local dirVec = headPos - camPos
 
-                    -- FIX #2: Checar magnitude antes de normalizar para evitar NaN
-                    if dirVec.Magnitude > 0.001 then
-                        local npcDir = dirVec.Unit
-                        local dot = mouseDir:Dot(npcDir)
-                        -- math.clamp já cobre o range, mas garantimos que dot não é NaN
-                        if dot == dot then -- NaN check (NaN != NaN)
-                            local angle = deg(acos(math.clamp(dot, -1, 1)))
-                            if angle < minAngle then
-                                closestNPC = model
-                                minAngle = angle
-                            end
-                        end
-                    end
+        if model ~= character and self:isValidTarget(model) then
+            local targetHRP = model:FindFirstChild("HumanoidRootPart")
+
+            if targetHRP then
+                local distance =
+                    (targetHRP.Position - hrp.Position).Magnitude
+
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closest = model
                 end
             end
         end
     end
 
-    return closestNPC
+    return closest
+end
+
+function AutoAim:getMouseData()
+    local mouse = self.mouse
+
+    if not mouse then
+        return nil
+    end
+
+    return {
+        Hit = mouse.Hit,
+        Target = mouse.Target,
+        UnitRay = mouse.UnitRay,
+        X = mouse.X,
+        Y = mouse.Y
+    }
 end
 
 function AutoAim:enable()
-    if self.enabled then return end
-
-    if not RemoteFunction then
-        if game.PlaceId == 14341521240 then
-            for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-                if obj:IsA("RemoteFunction") and obj.Name == "" then
-                    RemoteFunction = obj
-                    break
-                end
-            end
-        else
-            local requests = ReplicatedStorage:FindFirstChild("Requests")
-            if requests then
-                RemoteFunction = requests:FindFirstChild("GetMouse")
-            end
-        end
+    if self.enabled then
+        return
     end
 
-    if not RemoteFunction then
-        warn("[Auto-Aim] RemoteFunction not found. Cannot enable.")
+    local remote = self:getRemote()
+
+    if not remote then
         return
     end
 
     self.enabled = true
 
-    -- FIX #3: Salvar o callback original APENAS se for uma função válida
-    local existingCallback = RemoteFunction.OnClientInvoke
-    if type(existingCallback) == "function" then
-        self._originalOnClientInvoke = existingCallback
-    else
-        self._originalOnClientInvoke = nil
-    end
+    self:updateMouse()
 
-    -- FIX #5: Cleanup periódico sem race condition
-    local lastCleanup = tick()
-    self._heartbeatConnection = RunService.Heartbeat:Connect(function()
-        local currentTime = tick()
-        if currentTime - lastCleanup > 5 then
-            self:cleanupTargetHistory() -- pcall removido; cleanupTargetHistory agora é segura
-            lastCleanup = currentTime
-        end
+    self._heartbeat = RunService.Heartbeat:Connect(function()
+        self:updateMouse()
     end)
 
-    RemoteFunction.OnClientInvoke = function()
-        local character = LocalPlayer.Character
+    remote.OnClientInvoke = function(...)
+        self._invokeCount += 1
+
+        local mouseData = self:getMouseData()
+
+        if not mouseData then
+            return {
+                Hit = CFrame.new(),
+                Target = nil,
+                UnitRay = Ray.new(Vector3.zero, Vector3.zAxis),
+                X = 0,
+                Y = 0
+            }
+        end
+
+        local character = self:getCharacter()
+
         if not character then
-            return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
+            return mouseData
         end
 
-        local equippedTool = character:FindFirstChildOfClass("Tool")
-        local areaMarkers = Workspace:FindFirstChild("AreaMarkers")
-        if areaMarkers then
-            Mouse.TargetFilter = areaMarkers:FindFirstChild("The Arena")
+        local target = self:getClosestTarget()
+
+        if not target then
+            return mouseData
         end
 
-        if equippedTool and self.toolNames[equippedTool.Name] then
-            local targetNPC = self:getBestNPC(character)
-            if targetNPC then
-                local npcHRP = targetNPC:FindFirstChild("HumanoidRootPart")
-                local npcHead = targetNPC:FindFirstChild("Head")
-                if npcHead and npcHRP then
-                    self:updateTargetHistory(targetNPC)
+        local targetHRP = target:FindFirstChild("HumanoidRootPart")
 
-                    local hitPosition
-
-                    if equippedTool.Name == "Percutiens" then
-                        local predictedPosition = self:calculateMovementPrediction(targetNPC, self.timeToHit)
-
-                        -- FIX #4: Verificar se a predição retornou um valor válido
-                        if not predictedPosition then
-                            return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
-                        end
-
-                        local charHRP = character:FindFirstChild("HumanoidRootPart")
-                        if not charHRP then
-                            return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
-                        end
-
-                        local dirVec = npcHRP.Position - charHRP.Position
-                        -- FIX #2: Evitar normalização de vetor zero
-                        if dirVec.Magnitude < 0.001 then
-                            return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
-                        end
-
-                        local direction = dirVec.Unit
-                        hitPosition = predictedPosition + direction * random(self.studsBehindMin, self.studsBehindMax)
-                    else
-                        hitPosition = self:calculateMovementPrediction(targetNPC, self.timeToHit)
-
-                        -- FIX #4: Verificar se a predição retornou um valor válido
-                        if not hitPosition then
-                            return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
-                        end
-                    end
-
-                    -- Marcador de predição (verde)
-                    local marker = Instance.new("Part")
-                    marker.Anchored = true
-                    marker.CanCollide = false
-                    marker.Size = Vector3new(0.5, 0.5, 0.5)
-                    marker.Color = Color3.new(0, 1, 0)
-                    marker.Material = Enum.Material.Neon
-                    marker.Position = hitPosition
-                    marker.Parent = Workspace.CurrentCamera
-                    Debris:AddItem(marker, 2)
-
-                    -- Marcador de posição atual (vermelho)
-                    local currentMarker = Instance.new("Part")
-                    currentMarker.Anchored = true
-                    currentMarker.CanCollide = false
-                    currentMarker.Size = Vector3new(0.3, 0.3, 0.3)
-                    currentMarker.Color = Color3.new(1, 0, 0)
-                    currentMarker.Material = Enum.Material.Neon
-                    currentMarker.Position = npcHead.Position
-                    currentMarker.Parent = Workspace.CurrentCamera
-                    Debris:AddItem(currentMarker, 2)
-
-                    return {Hit=CFrame.new(hitPosition), Target=targetNPC, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
-                end
-            end
+        if not targetHRP then
+            return mouseData
         end
 
-        return {Hit=Mouse.Hit, Target=Mouse.Target, UnitRay=Mouse.UnitRay, X=Mouse.X, Y=Mouse.Y}
+        return {
+            Hit = CFrame.new(targetHRP.Position),
+            Target = target,
+            UnitRay = mouseData.UnitRay,
+            X = mouseData.X,
+            Y = mouseData.Y
+        }
     end
+
+    print("[AutoAim] enabled")
 end
 
 function AutoAim:disable()
-    if not self.enabled then return end
+    if not self.enabled then
+        return
+    end
+
     self.enabled = false
 
-    if self._heartbeatConnection then
-        self._heartbeatConnection:Disconnect()
-        self._heartbeatConnection = nil
+    if self._heartbeat then
+        self._heartbeat:Disconnect()
+        self._heartbeat = nil
     end
 
-    if RemoteFunction then
-        -- FIX #3: Só restaurar se havia um callback original válido;
-        -- caso contrário, não atribuir nil ao OnClientInvoke
-        pcall(function()
-            if type(self._originalOnClientInvoke) == "function" then
-                RemoteFunction.OnClientInvoke = self._originalOnClientInvoke
-            end
-        end)
-    end
-
-    self._originalOnClientInvoke = nil
+    print("[AutoAim] disabled")
 end
 
 return AutoAim
