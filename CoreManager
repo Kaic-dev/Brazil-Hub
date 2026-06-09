@@ -628,6 +628,13 @@ loadingScreen:step("UtilsService")
 local UtilsService = safeRequire(BRAZIL_HUB_BASE_URL .. "UtilsService")
 
 local connMgr = ConnectionManager and ConnectionManager.new() or nil
+if connMgr then
+    pcall(function()
+        game:BindToClose(function()
+            connMgr:dumpToFile("BrazilHub/connection_logs/connections_" .. os.date("%Y%m%d_%H%M%S") .. ".txt")
+        end)
+    end)
+end
 
 -- Helper para instanciar módulos com segurança
 local function safeNew(module, name)
