@@ -19,10 +19,8 @@ local STYLE = {
     StrokeAlpha      = 0.6,
     PaddingPx        = 6,
     CornerRadius     = UDim.new(0, 2),
-    LabelSize        = UDim2.new(1, -12, 1, -8),
-    LabelPosition    = UDim2.new(0, 6, 0, 4),
-    BillboardSize    = UDim2.new(0, 110, 0, 32),
-    BillboardOffset  = Vector3.new(0, 2.4, 0),
+    BillboardSize   = UDim2.new(0, 110, 0, 32),
+    BillboardOffset = Vector3.new(0, 2.4, 0),
 }
 
 -- ─── Cache ────────────────────────────────────────────────────────────────────
@@ -107,17 +105,25 @@ local function buildBillboard(adornee, maxDistance)
 
     -- Label principal
     local label = Instance.new("TextLabel")
-    label.Name                 = "FFLabel"
-    label.Size                 = STYLE.LabelSize
-    label.Position             = STYLE.LabelPosition
+    label.Name                   = "FFLabel"
+    label.Size                   = UDim2.new(1, 0, 1, 0)  -- ocupa o bg inteiro
+    label.Position               = UDim2.new(0, 0, 0, 0)
     label.BackgroundTransparency = 1
     label.TextStrokeTransparency = STYLE.StrokeAlpha
-    label.TextStrokeColor3     = Color3.fromRGB(0, 0, 0)
-    label.TextScaled           = false
-    label.Font                 = STYLE.Font
-    label.TextXAlignment       = Enum.TextXAlignment.Center
-    label.TextYAlignment       = Enum.TextYAlignment.Center
-    label.Parent               = bg
+    label.TextStrokeColor3       = Color3.fromRGB(0, 0, 0)
+    label.TextScaled             = false
+    label.Font                   = STYLE.Font
+    label.TextXAlignment         = Enum.TextXAlignment.Center
+    label.TextYAlignment         = Enum.TextYAlignment.Center
+    label.Parent                 = bg
+
+	-- Padding interno para o texto não encostar nas bordas
+	local padding = Instance.new("UIPadding")
+    padding.PaddingLeft   = UDim.new(0, 6)
+    padding.PaddingRight  = UDim.new(0, 6)
+    padding.PaddingTop    = UDim.new(0, 3)
+    padding.PaddingBottom = UDim.new(0, 3)
+    padding.Parent        = label
 
     return billboard, label
 end
