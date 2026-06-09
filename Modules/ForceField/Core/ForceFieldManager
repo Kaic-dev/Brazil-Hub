@@ -10,15 +10,16 @@ local FFTracker            = loadstring(game:HttpGet('https://raw.githubusercont
 local CharacterConnections = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/CharacterConnectionManager'))()
 local ConnectionManager    = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/ConnectionManager'))()
 
--- FIX: os.clock() em vez de tick() — tick() retorna Unix timestamp (bilhões de segundos),
---      causando tempos negativos/gigantes no cálculo de elapsed.
 local getTime = os.clock
 
+-- FIX #5: guard contra ff destruído antes do SetAttribute
 local function ensureStartTime(ff)
     local startTime = ff:GetAttribute("StartTime")
     if not startTime then
         startTime = getTime()
-        ff:SetAttribute("StartTime", startTime)
+        if ff and ff.Parent then
+            ff:SetAttribute("StartTime", startTime)
+        end
     end
     return startTime
 end
@@ -31,12 +32,19 @@ FFDetector.__index = FFDetector
 function FFDetector.new()
     local self = setmetatable({}, FFDetector)
 
-    self.enabled           = false
-    self._connMgr          = ConnectionManager.new()
-    self._charConnMgrs     = {}  -- [Character] = CharacterConnections
+    self.enabled            = false
+    self._connMgr           = ConnectionManager.new()
+    self._charConnMgrs      = {}
     self._billboardRenderer = BillboardRenderer.new()
-    self._ffTracker        = FFTracker.new()
-    self._lastUpdate       = 0
+    self._ffTracker         = FFTracker.new()
+    self._lastUpdate        = 0
+
+    -- FIX #3: buffer pré-alocado para evitar alocação de tabela a cada update
+    self._removeBuffer = {}
+    self._removeCount  = 0
+
+    -- FIX #6: contador de geração por personagem para debounce de CharacterAdded
+    self._charGenerations = {}
 
     return self
 end
@@ -51,7 +59,6 @@ function FFDetector:removeForceFieldData(character, ff)
 
     self._ffTracker:remove(character, ff)
 
-    -- Busca outro FF no personagem
     for _, child in ipairs(character:GetChildren()) do
         if child:IsA("ForceField") and child ~= ff then
             local startTime = ensureStartTime(child)
@@ -64,13 +71,13 @@ function FFDetector:removeForceFieldData(character, ff)
         end
     end
 
-    -- Nenhum FF restante
     self._billboardRenderer:remove(character)
 end
 
 function FFDetector:clearCharacterData(character)
     self._billboardRenderer:remove(character)
     self._ffTracker:clear(character)
+    self._charGenerations[character] = nil
 
     local mgr = self._charConnMgrs[character]
     if mgr then
@@ -79,15 +86,16 @@ function FFDetector:clearCharacterData(character)
     end
 end
 
--- ─── Cleanup ──────────────────────────────────────────────────────────────────
+-- ─── Cleanup interno (apenas estado) ─────────────────────────────────────────
 
-function FFDetector:cleanup()
-    self._connMgr:disconnectAll()
-
+-- FIX #2: separado de disconnectAll() para que enable/disable controlem
+--         a ordem exata: desconectar primeiro, limpar estado depois.
+function FFDetector:_cleanupState()
     for _, mgr in pairs(self._charConnMgrs) do
         mgr:disconnect()
     end
-    self._charConnMgrs = {}
+    self._charConnMgrs    = {}
+    self._charGenerations = {}
 
     for character in pairs(self._ffTracker:getAll()) do
         self._billboardRenderer:remove(character)
@@ -95,9 +103,19 @@ function FFDetector:cleanup()
 
     self._ffTracker:clearAll()
 
-    -- FIX: recria instâncias para estado limpo após disable/enable
+    -- Recria instâncias para estado limpo
     self._billboardRenderer = BillboardRenderer.new()
     self._ffTracker         = FFTracker.new()
+
+    -- Reseta buffer de remoção
+    self._removeCount = 0
+end
+
+-- Mantido para compatibilidade externa (chamado apenas por disable agora)
+function FFDetector:cleanup()
+    self._connMgr:disconnectAll()
+    self:_cleanupState()
+    self._connMgr = ConnectionManager.new()
 end
 
 -- ─── Eventos de ForceField ────────────────────────────────────────────────────
@@ -120,29 +138,37 @@ end
 function FFDetector:registerCharacterFF(character)
     if not self.enabled then return end
 
-    -- Descarta gerenciador anterior se existir
+    -- FIX #6: geração garante que apenas o registro mais recente prossegue.
+    --         Protege contra CharacterAdded duplicado na mesma frame.
+    local gen = (self._charGenerations[character] or 0) + 1
+    self._charGenerations[character] = gen
+
     local existing = self._charConnMgrs[character]
     if existing then
         existing:disconnect()
         self._charConnMgrs[character] = nil
     end
 
+    -- Se a geração já foi superada por outro evento, abandona.
+    if self._charGenerations[character] ~= gen then return end
+
     local manager = CharacterConnections.new(character)
     manager:setHandlers({
         onFFAdded = function(ff)
+            if self._charGenerations[character] ~= gen then return end
             self:onForceFieldAdded(character, ff)
         end,
         onCharacterRemoved = function()
             self:clearCharacterData(character)
         end,
         onFFRemoved = function(ff)
+            if self._charGenerations[character] ~= gen then return end
             self:removeForceFieldData(character, ff)
         end,
     })
     manager:watch()
     self._charConnMgrs[character] = manager
 
-    -- Leitura inicial dos FFs já existentes
     for _, child in ipairs(character:GetChildren()) do
         if child:IsA("ForceField") then
             local startTime = ensureStartTime(child)
@@ -164,7 +190,6 @@ function FFDetector:registerPlayer(player)
         self:registerCharacterFF(player.Character)
     end
 
-    -- FIX: labels adicionados para facilitar debug e rastreamento
     self._connMgr:add(
         player.CharacterAdded:Connect(function(character)
             self:registerCharacterFF(character)
@@ -180,25 +205,29 @@ function FFDetector:registerPlayer(player)
     )
 end
 
--- ─── Update de billboards ────────────────────────────────────────────────────
+-- ─── Update de billboards ─────────────────────────────────────────────────────
 
 function FFDetector:updateBillboards()
     local currentTime = getTime()
     if currentTime - self._lastUpdate < Config.FF.UpdateInterval then return end
     self._lastUpdate = currentTime
 
-    local toRemove = {}
+    -- FIX #3: reutiliza buffer pré-alocado, sem criar tabela nova por frame
+    self._removeCount = 0
+
     for character, ffData in pairs(self._ffTracker:getAll()) do
         local ff = ffData.ff
         if ff and ff.Parent == character then
             self._billboardRenderer:create(character, ff, ffData.startTime)
         else
-            toRemove[#toRemove + 1] = character
+            self._removeCount = self._removeCount + 1
+            self._removeBuffer[self._removeCount] = character
         end
     end
 
-    for i = 1, #toRemove do
-        local character = toRemove[i]
+    for i = 1, self._removeCount do
+        local character = self._removeBuffer[i]
+        self._removeBuffer[i] = nil  -- libera referência sem realocar tabela
         local trackedFF = self._ffTracker:find(character)
         if trackedFF then
             self:removeForceFieldData(character, trackedFF)
@@ -206,14 +235,16 @@ function FFDetector:updateBillboards()
     end
 end
 
--- ─── Enable / Disable ────────────────────────────────────────────────────────
+-- ─── Enable / Disable ─────────────────────────────────────────────────────────
 
 function FFDetector:enable()
     if self.enabled then return end
     self.enabled = true
-    self:cleanup()
 
-    -- FIX: recria connMgr após cleanup para garantir instância limpa
+    -- FIX #1 + #2: desconecta Heartbeat e conexões globais ANTES de recriar estado,
+    --              eliminando o tick de Heartbeat que poderia acessar estado parcial.
+    self._connMgr:disconnectAll()
+    self:_cleanupState()
     self._connMgr = ConnectionManager.new()
 
     for _, player in ipairs(Players:GetPlayers()) do
@@ -247,10 +278,15 @@ end
 function FFDetector:disable()
     if not self.enabled then return end
     self.enabled = false
-    self:cleanup()
+
+    -- FIX #1: desconecta Heartbeat imediatamente, antes de qualquer limpeza de estado.
+    --         Garante que updateBillboards() não dispara mais nenhum tick após disable().
+    self._connMgr:disconnectAll()
+    self:_cleanupState()
+    self._connMgr = ConnectionManager.new()
 end
 
--- ─── API pública ─────────────────────────────────────────────────────────────
+-- ─── API pública ──────────────────────────────────────────────────────────────
 
 function FFDetector:setBillboardMaxDistance(value)
     self._billboardRenderer:setMaxDistance(value)
