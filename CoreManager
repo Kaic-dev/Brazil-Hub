@@ -1,55 +1,42 @@
--- FF Detector Script with LinoriaLib UI Integration
--- Refactored for better maintainability and organization
-
---[[
-    Main script that integrates multiple game enhancement modules:
-    - FF (ForceField) Detection
-    - Player ESP
-    - Auto-Aim system
-    - Better Leaderboard
-    
-    Uses LinoriaLib for UI management with theme and save support.
-]]
-
--- ========================================
--- DEPENDENCIES AND LIBRARY SETUP
--- ========================================
+-- FF Detector Script — Main (Bug-fixed)
+-- Fixes: Heartbeat órfão, InputBegan sem connMgr, BrazilHubLoaded sem reset,
+--        tick() → os.clock(), queue_on_teleport seguro
 
 if getgenv().BrazilHubLoaded then return end
 getgenv().BrazilHubLoaded = true
 
--- Garante inicialização das tabelas de UI globais
+-- ─── Globais de UI ────────────────────────────────────────────────────────────
+
 if not getgenv().Options then getgenv().Options = {} end
 if not getgenv().Toggles then getgenv().Toggles = {} end
-_G.Options = getgenv().Options
-_G.Toggles = getgenv().Toggles
+_G.Options  = getgenv().Options
+_G.Toggles  = getgenv().Toggles
 shared.Options = getgenv().Options
 shared.Toggles = getgenv().Toggles
 
+-- ─── Serviços ─────────────────────────────────────────────────────────────────
+
+local Players         = game:GetService("Players")
+local RunService      = game:GetService("RunService")
+local TweenService    = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+
+-- ─── Espera carregamento ──────────────────────────────────────────────────────
+
 local function waitForLoaded()
-    -- Aguarda o carregamento do jogo
     if not game:IsLoaded() then
-        print("[waitForLoaded] Aguardando game:IsLoaded()...")
         game.Loaded:Wait()
     end
-
-    local Players = game:GetService("Players")
     local LocalPlayer = Players.LocalPlayer
-    -- Aguarda o LocalPlayer existir
     while not LocalPlayer do
-        print("[waitForLoaded] Aguardando Players.LocalPlayer...")
         Players.PlayerAdded:Wait()
         LocalPlayer = Players.LocalPlayer
     end
-    -- Aguarda o PlayerGui existir
     local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
     local tries = 0
     while not playerGui and tries < 10 do
-        print("[waitForLoaded] Aguardando PlayerGui... tentativa " .. tostring(tries+1))
         playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-        if not playerGui then
-            playerGui = LocalPlayer:WaitForChild("PlayerGui", 5)
-        end
+            or LocalPlayer:WaitForChild("PlayerGui", 5)
         tries = tries + 1
     end
     if not playerGui then
@@ -60,301 +47,245 @@ end
 
 waitForLoaded()
 
-local TweenService = game:GetService("TweenService")
-
--- ========================================
--- LOADING SCREEN
--- ========================================
+-- ─── Loading Screen ───────────────────────────────────────────────────────────
 
 local LoadingScreen = {}
 
 function LoadingScreen.create()
-    local Players = game:GetService("Players")
-    local CoreGui = game:GetService("CoreGui")
+    local CoreGui   = game:GetService("CoreGui")
     local LocalPlayer = Players.LocalPlayer
-    
+
     local parent
     pcall(function() parent = CoreGui end)
     if not parent then parent = LocalPlayer:WaitForChild("PlayerGui") end
-    
+
     local gui = Instance.new("ScreenGui")
-    gui.Name = "BrazilHubLoading"
-    gui.ResetOnSpawn = false
-    gui.DisplayOrder = 999
+    gui.Name           = "BrazilHubLoading"
+    gui.ResetOnSpawn   = false
+    gui.DisplayOrder   = 999
     gui.IgnoreGuiInset = true
-    gui.Parent = parent
-    
-    -- Full-screen dark overlay
+    gui.Parent         = parent
+
     local overlay = Instance.new("Frame")
-    overlay.Name = "Overlay"
-    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.Name             = "Overlay"
+    overlay.Size             = UDim2.new(1, 0, 1, 0)
     overlay.BackgroundColor3 = Color3.fromRGB(6, 6, 8)
-    overlay.BorderSizePixel = 0
-    overlay.Parent = gui
-    
-    -- Parchment texture
+    overlay.BorderSizePixel  = 0
+    overlay.Parent           = gui
+
     local texture = Instance.new("ImageLabel")
-    texture.Size = UDim2.new(1, 0, 1, 0)
+    texture.Size               = UDim2.new(1, 0, 1, 0)
     texture.BackgroundTransparency = 1
-    texture.Image = "rbxassetid://1327087642"
-    texture.ImageTransparency = 0.92
-    texture.ScaleType = Enum.ScaleType.Tile
-    texture.TileSize = UDim2.new(0, 256, 0, 256)
-    texture.Parent = overlay
-    
-    -- Center container
+    texture.Image              = "rbxassetid://1327087642"
+    texture.ImageTransparency  = 0.92
+    texture.ScaleType          = Enum.ScaleType.Tile
+    texture.TileSize           = UDim2.new(0, 256, 0, 256)
+    texture.Parent             = overlay
+
     local center = Instance.new("Frame")
-    center.Name = "Center"
-    center.Size = UDim2.new(0, 320, 0, 140)
-    center.Position = UDim2.new(0.5, 0, 0.5, 0)
-    center.AnchorPoint = Vector2.new(0.5, 0.5)
+    center.Name                = "Center"
+    center.Size                = UDim2.new(0, 320, 0, 140)
+    center.Position            = UDim2.new(0.5, 0, 0.5, 0)
+    center.AnchorPoint         = Vector2.new(0.5, 0.5)
     center.BackgroundTransparency = 1
-    center.Parent = overlay
-    
-    -- Decorative top line
-    local topLine = Instance.new("Frame")
-    topLine.Size = UDim2.new(0, 0, 0, 1)
-    topLine.Position = UDim2.new(0.5, 0, 0, 0)
-    topLine.AnchorPoint = Vector2.new(0.5, 0)
-    topLine.BackgroundColor3 = Color3.fromRGB(115, 95, 65)
-    topLine.BorderSizePixel = 0
-    topLine.Parent = center
-    TweenService:Create(topLine, TweenInfo.new(0.8, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 1)}):Play()
-    
-    -- Title
-    local title = Instance.new("TextLabel")
-    title.Name = "Title"
-    title.Size = UDim2.new(1, 0, 0, 40)
-    title.Position = UDim2.new(0, 0, 0, 12)
-    title.BackgroundTransparency = 1
-    title.Text = "BRAZIL HUB"
-    title.TextColor3 = Color3.fromRGB(205, 170, 105)
-    title.Font = Enum.Font.Garamond
-    title.TextSize = 32
-    title.TextTransparency = 1
-    title.Parent = center
-    TweenService:Create(title, TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, 0.2), {TextTransparency = 0}):Play()
-    
-    -- Subtitle
-    local subtitle = Instance.new("TextLabel")
-    subtitle.Name = "Subtitle"
-    subtitle.Size = UDim2.new(1, 0, 0, 16)
-    subtitle.Position = UDim2.new(0, 0, 0, 50)
-    subtitle.BackgroundTransparency = 1
-    subtitle.Text = "Rogue Lineage"
-    subtitle.TextColor3 = Color3.fromRGB(130, 130, 132)
-    subtitle.Font = Enum.Font.Garamond
-    subtitle.TextSize = 16
-    subtitle.TextTransparency = 1
-    subtitle.Parent = center
-    TweenService:Create(subtitle, TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, 0.4), {TextTransparency = 0}):Play()
-    
-    -- Progress bar background
+    center.Parent              = overlay
+
+    local function makeLine(yPos)
+        local line = Instance.new("Frame")
+        line.Size             = UDim2.new(0, 0, 0, 1)
+        line.Position         = UDim2.new(0.5, 0, 0, yPos)
+        line.AnchorPoint      = Vector2.new(0.5, 0)
+        line.BackgroundColor3 = Color3.fromRGB(115, 95, 65)
+        line.BorderSizePixel  = 0
+        line.Parent           = center
+        TweenService:Create(line,
+            TweenInfo.new(0.8, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+            { Size = UDim2.new(1, 0, 0, 1) }
+        ):Play()
+        return line
+    end
+
+    local function makeLabel(name, text, yPos, size, color, delay)
+        local lbl = Instance.new("TextLabel")
+        lbl.Name               = name
+        lbl.Size               = UDim2.new(1, 0, 0, size)
+        lbl.Position           = UDim2.new(0, 0, 0, yPos)
+        lbl.BackgroundTransparency = 1
+        lbl.Text               = text
+        lbl.TextColor3         = color
+        lbl.Font               = Enum.Font.Garamond
+        lbl.TextSize           = size
+        lbl.TextTransparency   = 1
+        lbl.Parent             = center
+        TweenService:Create(lbl,
+            TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, delay),
+            { TextTransparency = 0 }
+        ):Play()
+        return lbl
+    end
+
+    makeLine(0)
+    makeLabel("Title",    "BRAZIL HUB",    12, 32, Color3.fromRGB(205, 170, 105), 0.2)
+    makeLabel("Subtitle", "Rogue Lineage", 50, 16, Color3.fromRGB(130, 130, 132), 0.4)
+
     local barBg = Instance.new("Frame")
-    barBg.Name = "BarBg"
-    barBg.Size = UDim2.new(0.85, 0, 0, 2)
-    barBg.Position = UDim2.new(0.5, 0, 0, 82)
-    barBg.AnchorPoint = Vector2.new(0.5, 0)
+    barBg.Name             = "BarBg"
+    barBg.Size             = UDim2.new(0.85, 0, 0, 2)
+    barBg.Position         = UDim2.new(0.5, 0, 0, 82)
+    barBg.AnchorPoint      = Vector2.new(0.5, 0)
     barBg.BackgroundColor3 = Color3.fromRGB(35, 35, 38)
-    barBg.BorderSizePixel = 0
-    barBg.Parent = center
-    
-    -- Progress bar fill
+    barBg.BorderSizePixel  = 0
+    barBg.Parent           = center
+
     local barFill = Instance.new("Frame")
-    barFill.Name = "Fill"
-    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.Name             = "Fill"
+    barFill.Size             = UDim2.new(0, 0, 1, 0)
     barFill.BackgroundColor3 = Color3.fromRGB(115, 95, 65)
-    barFill.BorderSizePixel = 0
-    barFill.Parent = barBg
-    
-    -- Glow effect on the bar fill
+    barFill.BorderSizePixel  = 0
+    barFill.Parent           = barBg
+
     local barGlow = Instance.new("Frame")
-    barGlow.Name = "Glow"
-    barGlow.Size = UDim2.new(0, 20, 0, 6)
-    barGlow.Position = UDim2.new(1, 0, 0.5, 0)
-    barGlow.AnchorPoint = Vector2.new(1, 0.5)
-    barGlow.BackgroundColor3 = Color3.fromRGB(205, 170, 105)
+    barGlow.Size                  = UDim2.new(0, 20, 0, 6)
+    barGlow.Position              = UDim2.new(1, 0, 0.5, 0)
+    barGlow.AnchorPoint           = Vector2.new(1, 0.5)
+    barGlow.BackgroundColor3      = Color3.fromRGB(205, 170, 105)
     barGlow.BackgroundTransparency = 0.5
-    barGlow.BorderSizePixel = 0
-    barGlow.Parent = barFill
-    
-    -- Status text
-    local status = Instance.new("TextLabel")
-    status.Name = "Status"
-    status.Size = UDim2.new(1, 0, 0, 16)
-    status.Position = UDim2.new(0, 0, 0, 94)
-    status.BackgroundTransparency = 1
-    status.Text = "Initializing..."
-    status.TextColor3 = Color3.fromRGB(130, 130, 132)
-    status.Font = Enum.Font.Garamond
-    status.TextSize = 14
-    status.TextTransparency = 1
-    status.Parent = center
-    TweenService:Create(status, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, 0.5), {TextTransparency = 0}):Play()
-    
-    -- Module counter
-    local counter = Instance.new("TextLabel")
-    counter.Name = "Counter"
-    counter.Size = UDim2.new(1, 0, 0, 14)
-    counter.Position = UDim2.new(0, 0, 0, 114)
-    counter.BackgroundTransparency = 1
-    counter.Text = ""
-    counter.TextColor3 = Color3.fromRGB(80, 80, 82)
-    counter.Font = Enum.Font.Garamond
-    counter.TextSize = 12
-    counter.TextTransparency = 1
-    counter.Parent = center
-    TweenService:Create(counter, TweenInfo.new(0.4, Enum.EasingStyle.Quart, Enum.EasingDirection.Out, 0, false, 0.6), {TextTransparency = 0}):Play()
-    
-    -- Decorative bottom line
-    local bottomLine = Instance.new("Frame")
-    bottomLine.Size = UDim2.new(0, 0, 0, 1)
-    bottomLine.Position = UDim2.new(0.5, 0, 0, 134)
-    bottomLine.AnchorPoint = Vector2.new(0.5, 0)
-    bottomLine.BackgroundColor3 = Color3.fromRGB(115, 95, 65)
-    bottomLine.BorderSizePixel = 0
-    bottomLine.Parent = center
-    TweenService:Create(bottomLine, TweenInfo.new(0.8, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Size = UDim2.new(1, 0, 0, 1)}):Play()
-    
+    barGlow.BorderSizePixel       = 0
+    barGlow.Parent                = barFill
+
+    local status  = makeLabel("Status",  "Initializing...", 94,  14, Color3.fromRGB(130, 130, 132), 0.5)
+    local counter = makeLabel("Counter", "",                114,  12, Color3.fromRGB(80, 80, 82),    0.6)
+    makeLine(134)
+
     local screen = {
-        gui = gui,
-        overlay = overlay,
-        barFill = barFill,
-        status = status,
-        counter = counter,
-        currentStep = 0,
-        totalSteps = 1,
+        gui          = gui,
+        overlay      = overlay,
+        barFill      = barFill,
+        status       = status,
+        counter      = counter,
+        currentStep  = 0,
+        totalSteps   = 1,
     }
-    
-    function screen:setTotalSteps(n)
-        self.totalSteps = n
-    end
-    
-    function screen:setStatus(text)
-        self.status.Text = text
-    end
-    
+
+    function screen:setTotalSteps(n)  self.totalSteps = n end
+    function screen:setStatus(text)   self.status.Text = text end
+
     function screen:step(moduleName)
         self.currentStep = self.currentStep + 1
         local pct = math.clamp(self.currentStep / self.totalSteps, 0, 1)
-        self.status.Text = "Loading " .. moduleName .. "..."
+        self.status.Text  = "Loading " .. moduleName .. "..."
         self.counter.Text = self.currentStep .. " / " .. self.totalSteps
-        TweenService:Create(self.barFill, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-            Size = UDim2.new(pct, 0, 1, 0)
-        }):Play()
+        TweenService:Create(self.barFill,
+            TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+            { Size = UDim2.new(pct, 0, 1, 0) }
+        ):Play()
     end
-    
+
     function screen:finish()
-        self.status.Text = "Ready"
+        self.status.Text  = "Ready"
         self.counter.Text = self.totalSteps .. " / " .. self.totalSteps
-        TweenService:Create(self.barFill, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-            Size = UDim2.new(1, 0, 1, 0),
-            BackgroundColor3 = Color3.fromRGB(205, 170, 105)
-        }):Play()
-        
+        TweenService:Create(self.barFill,
+            TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out),
+            { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(205, 170, 105) }
+        ):Play()
         task.wait(0.6)
-        
-        -- Fade out
-        TweenService:Create(self.overlay, TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In), {
-            BackgroundTransparency = 1
-        }):Play()
-        
-        -- Fade all children
+
+        TweenService:Create(self.overlay,
+            TweenInfo.new(0.5, Enum.EasingStyle.Quart, Enum.EasingDirection.In),
+            { BackgroundTransparency = 1 }
+        ):Play()
+
+        -- Fade em batch: separa por tipo para evitar GetDescendants() repetido
         for _, desc in ipairs(self.gui:GetDescendants()) do
-            pcall(function()
-                if desc:IsA("TextLabel") then
-                    TweenService:Create(desc, TweenInfo.new(0.4, Enum.EasingStyle.Quart), {TextTransparency = 1}):Play()
-                elseif desc:IsA("Frame") then
-                    TweenService:Create(desc, TweenInfo.new(0.4, Enum.EasingStyle.Quart), {BackgroundTransparency = 1}):Play()
-                elseif desc:IsA("ImageLabel") then
-                    TweenService:Create(desc, TweenInfo.new(0.4, Enum.EasingStyle.Quart), {ImageTransparency = 1}):Play()
-                end
-            end)
+            if desc:IsA("TextLabel") then
+                TweenService:Create(desc,
+                    TweenInfo.new(0.4, Enum.EasingStyle.Quart),
+                    { TextTransparency = 1 }
+                ):Play()
+            elseif desc:IsA("Frame") then
+                TweenService:Create(desc,
+                    TweenInfo.new(0.4, Enum.EasingStyle.Quart),
+                    { BackgroundTransparency = 1 }
+                ):Play()
+            elseif desc:IsA("ImageLabel") then
+                TweenService:Create(desc,
+                    TweenInfo.new(0.4, Enum.EasingStyle.Quart),
+                    { ImageTransparency = 1 }
+                ):Play()
+            end
         end
-        
+
         task.wait(0.6)
         self.gui:Destroy()
     end
-    
+
     return screen
 end
 
-local loadingScreen = LoadingScreen.create()
-loadingScreen:setTotalSteps(15) -- Total modules to load
-task.wait(0.3) -- Let intro animations play
+-- ─── URLs ─────────────────────────────────────────────────────────────────────
 
-local REPO_BASE_URL = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/'
 local BRAZIL_HUB_BASE_URL = "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/"
 
--- Helper para carregar módulos remotos com proteção
 local function safeRequireRemote(url, name)
-    local success, result = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if not success then
-        warn("[BrazilHub] Failed to download module:", name or url, tostring(result))
-        return nil
-    end
-
-    local moduleFunc, err = loadstring(result)
-    if not moduleFunc then
-        warn("[BrazilHub] Failed to compile module:", name or url, tostring(err))
-        return nil
-    end
-
-    local ok, module = pcall(moduleFunc)
+    local ok, raw = pcall(game.HttpGet, game, url)
     if not ok then
-        warn("[BrazilHub] Failed to execute module:", name or url, tostring(module))
+        warn("[BrazilHub] Download falhou:", name, raw)
         return nil
     end
-
-    return module
+    local fn, err = loadstring(raw)
+    if not fn then
+        warn("[BrazilHub] Compilação falhou:", name, err)
+        return nil
+    end
+    local ok2, mod = pcall(fn)
+    if not ok2 then
+        warn("[BrazilHub] Execução falhou:", name, mod)
+        return nil
+    end
+    return mod
 end
 
--- Hook Drawing.new to fix compatibility issues on executors where Drawing objects' Visible property expects a number
+-- ─── Drawing proxy (compatibilidade de executor) ──────────────────────────────
+
 if Drawing and Drawing.new then
     local oldDrawingNew = Drawing.new
     Drawing.new = function(class)
         local realObj = oldDrawingNew(class)
-        local proxy = newproxy(true)
-        local mt = getmetatable(proxy)
-        
-        mt.__index = function(t, k)
+        local proxy   = newproxy(true)
+        local mt      = getmetatable(proxy)
+        mt.__index = function(_, k)
             local val = realObj[k]
             if type(val) == "function" then
-                return function(_, ...)
-                    return val(realObj, ...)
-                end
+                return function(_, ...) return val(realObj, ...) end
             end
             return val
         end
-        
-        mt.__newindex = function(t, k, v)
+        mt.__newindex = function(_, k, v)
             if k == "Visible" then
-                local success = pcall(function()
-                    realObj.Visible = v
-                end)
-                if not success then
-                    pcall(function()
-                        realObj.Visible = (v == true and 1 or 0)
-                    end)
+                if not pcall(function() realObj.Visible = v end) then
+                    pcall(function() realObj.Visible = v == true and 1 or 0 end)
                 end
             else
                 realObj[k] = v
             end
         end
-        
         return proxy
     end
 end
 
--- Carrega RogueUILib (Estilo Rogue Lineage)
-loadingScreen:step("RogueUILib")
-local Library = safeRequireRemote(BRAZIL_HUB_BASE_URL .. 'RogueUILib', 'RogueUILib')
+-- ─── Loading Screen ───────────────────────────────────────────────────────────
 
--- Carrega e executa o sistema de key
+local loadingScreen = LoadingScreen.create()
+loadingScreen:setTotalSteps(15)
+task.wait(0.3)
+
+-- ─── Bibliotecas de UI ────────────────────────────────────────────────────────
+
+loadingScreen:step("RogueUILib")
+local Library = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "RogueUILib", "RogueUILib")
+
 loadingScreen:step("KeyHandler")
-local KeyHandler = safeRequireRemote(BRAZIL_HUB_BASE_URL .. 'KeyHandler', 'KeyHandler')
+local KeyHandler = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "KeyHandler", "KeyHandler")
 local keyHandler = KeyHandler and KeyHandler.new and KeyHandler.new(Library)
 if keyHandler then
     keyHandler:requireValidKey()
@@ -362,19 +293,21 @@ else
     warn("[BrazilHub] KeyHandler não carregado")
 end
 
--- Mocks do ThemeManager e SaveManager para compatibilidade
+-- ─── SaveManager ──────────────────────────────────────────────────────────────
+
 local ThemeManager = {
-    SetLibrary = function() end,
-    SetFolder = function() end,
-    ApplyToTab = function() end,
+    SetLibrary  = function() end,
+    SetFolder   = function() end,
+    ApplyToTab  = function() end,
 }
+
 local function safeWriteFile(path, content)
     local ok, err = pcall(function()
         if writefile then
-            local parts = string.split(path, "/")
+            local parts   = string.split(path, "/")
             local current = ""
             for i = 1, #parts - 1 do
-                current = current == "" and parts[i] or current .. "/" .. parts[i]
+                current = current == "" and parts[i] or (current .. "/" .. parts[i])
                 if makefolder and isfolder and not isfolder(current) then
                     makefolder(current)
                 end
@@ -402,67 +335,51 @@ local function safeIsFile(path)
 end
 
 local SaveManager = {
-    Library = nil,
-    Folder = "BrazilHub/Rogue-Lineage",
-    IgnoreIndexes = {},
-    AutoloadFile = "BrazilHub/Rogue-Lineage/autoload.txt",
+    Library        = nil,
+    Folder         = "BrazilHub/Rogue-Lineage",
+    IgnoreIndexes  = {},
+    AutoloadFile   = "BrazilHub/Rogue-Lineage/autoload.txt",
 }
 
-function SaveManager:SetLibrary(lib)
-    self.Library = lib
-end
-
-function SaveManager:IgnoreThemeSettings()
-end
-
+function SaveManager:SetLibrary(lib)  self.Library = lib end
+function SaveManager:IgnoreThemeSettings() end
 function SaveManager:SetIgnoreIndexes(list)
     self.IgnoreIndexes = {}
-    for _, idx in ipairs(list) do
-        self.IgnoreIndexes[idx] = true
-    end
+    for _, idx in ipairs(list) do self.IgnoreIndexes[idx] = true end
 end
-
 function SaveManager:SetFolder(folder)
-    self.Folder = folder
+    self.Folder       = folder
     self.AutoloadFile = folder .. "/autoload.txt"
 end
 
 function SaveManager:Save(name)
     if not name or name == "" then return false end
-    local filePath = self.Folder .. "/configs/" .. name .. ".json"
-    
-    local data = {
-        Toggles = {},
-        Options = {}
-    }
-    
+    local HttpService = game:GetService("HttpService")
+    local data = { Toggles = {}, Options = {} }
     for id, toggle in pairs(getgenv().Toggles) do
         if not self.IgnoreIndexes[id] then
             data.Toggles[id] = toggle.Value
         end
     end
-    
     for id, option in pairs(getgenv().Options) do
         if not self.IgnoreIndexes[id] then
             local val = option.Value
             if typeof(val) == "EnumItem" then
                 data.Options[id] = { Type = "Keybind", Value = val.Name }
             elseif typeof(val) == "Color3" then
-                data.Options[id] = { Type = "Color", Value = { val.R, val.G, val.B } }
+                data.Options[id] = { Type = "Color",   Value = { val.R, val.G, val.B } }
             elseif type(val) == "table" and option.Values then
                 data.Options[id] = { Type = "Dropdown", Value = val }
             else
-                data.Options[id] = { Type = "Value", Value = val }
+                data.Options[id] = { Type = "Value",   Value = val }
             end
         end
     end
-    
-    local HttpService = game:GetService("HttpService")
-    local jsonStr = HttpService:JSONEncode(data)
-    local ok, err = safeWriteFile(filePath, jsonStr)
-    if not ok then
-        warn("[SaveManager] Error saving config:", tostring(err))
-    end
+    local ok, err = safeWriteFile(
+        self.Folder .. "/configs/" .. name .. ".json",
+        HttpService:JSONEncode(data)
+    )
+    if not ok then warn("[SaveManager] Erro ao salvar:", tostring(err)) end
     return ok
 end
 
@@ -470,989 +387,699 @@ function SaveManager:Load(name)
     if not name or name == "" then return false end
     local filePath = self.Folder .. "/configs/" .. name .. ".json"
     if not safeIsFile(filePath) then return false end
-    
     local content = safeReadFile(filePath)
     if not content then return false end
-    
     local HttpService = game:GetService("HttpService")
     local ok, data = pcall(HttpService.JSONDecode, HttpService, content)
     if not ok or type(data) ~= "table" then return false end
-    
     if data.Toggles then
         for id, state in pairs(data.Toggles) do
-            local toggle = getgenv().Toggles[id]
-            if toggle and not self.IgnoreIndexes[id] then
-                pcall(function() toggle:SetValue(state) end)
+            local t = getgenv().Toggles[id]
+            if t and not self.IgnoreIndexes[id] then
+                pcall(function() t:SetValue(state) end)
             end
         end
     end
-    
     if data.Options then
         for id, optData in pairs(data.Options) do
-            local option = getgenv().Options[id]
-            if option and not self.IgnoreIndexes[id] then
+            local opt = getgenv().Options[id]
+            if opt and not self.IgnoreIndexes[id] then
                 pcall(function()
                     if type(optData) == "table" and optData.Type then
                         if optData.Type == "Keybind" then
                             local key = Enum.KeyCode[optData.Value]
-                            if key then option:SetValue(key) end
+                            if key then opt:SetValue(key) end
                         elseif optData.Type == "Color" then
-                            local rgb = optData.Value
-                            local color = Color3.new(rgb[1], rgb[2], rgb[3])
-                            option:SetValue(color)
-                        elseif optData.Type == "Dropdown" then
-                            option:SetValue(optData.Value)
+                            local r = optData.Value
+                            opt:SetValue(Color3.new(r[1], r[2], r[3]))
                         else
-                            option:SetValue(optData.Value)
+                            opt:SetValue(optData.Value)
                         end
                     else
-                        option:SetValue(optData)
+                        opt:SetValue(optData)
                     end
                 end)
             end
         end
     end
-    
     return true
 end
 
 function SaveManager:LoadAutoloadConfig()
     if safeIsFile(self.AutoloadFile) then
         local name = safeReadFile(self.AutoloadFile)
-        if name and name ~= "" then
-            self:Load(name)
-        end
+        if name and name ~= "" then self:Load(name) end
     end
 end
 
 function SaveManager:BuildConfigSection(tab)
-    local configGroup = tab:AddRightGroupbox('Configurations')
-    
-    local slots = {"Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5"}
+    local configGroup  = tab:AddRightGroupbox("Configurations")
+    local slots        = { "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5" }
     local selectedSlot = "Slot 1"
-    
-    configGroup:AddDropdown('SelectedConfigSlot', {
-        Values = slots,
-        Default = "Slot 1",
-        Text = 'Select Config Slot',
-        Callback = function(val)
-            selectedSlot = val
-        end
+
+    configGroup:AddDropdown("SelectedConfigSlot", {
+        Values   = slots,
+        Default  = "Slot 1",
+        Text     = "Select Config Slot",
+        Callback = function(val) selectedSlot = val end,
     })
-    
-    configGroup:AddButton('Save Config', function()
-        if self:Save(selectedSlot) then
-            print("[SaveManager] Config saved to " .. selectedSlot)
-        else
-            warn("[SaveManager] Failed to save config " .. selectedSlot)
-        end
-    end)
-    
-    configGroup:AddButton('Load Config', function()
-        if self:Load(selectedSlot) then
-            print("[SaveManager] Config loaded from " .. selectedSlot)
-        else
-            warn("[SaveManager] Failed to load config " .. selectedSlot)
-        end
-    end)
-    
-    configGroup:AddToggle('AutoloadConfig', {
-        Text = 'Autoload Selected Slot',
-        Default = false,
+    configGroup:AddButton("Save Config",  function() self:Save(selectedSlot) end)
+    configGroup:AddButton("Load Config",  function() self:Load(selectedSlot) end)
+    configGroup:AddToggle("AutoloadConfig", {
+        Text     = "Autoload Selected Slot",
+        Default  = false,
         Callback = function(state)
-            if state then
-                safeWriteFile(self.AutoloadFile, selectedSlot)
-            else
-                safeWriteFile(self.AutoloadFile, "")
-            end
-        end
+            safeWriteFile(self.AutoloadFile, state and selectedSlot or "")
+        end,
     })
-    
+
     task.spawn(function()
         if safeIsFile(self.AutoloadFile) then
-            local currentAutoload = safeReadFile(self.AutoloadFile)
-            if currentAutoload and currentAutoload ~= "" then
-                local toggle = getgenv().Toggles['AutoloadConfig']
-                if toggle then
-                    toggle:SetValue(true)
-                end
+            local cur = safeReadFile(self.AutoloadFile)
+            if cur and cur ~= "" then
+                local t = getgenv().Toggles["AutoloadConfig"]
+                if t then t:SetValue(true) end
             end
         end
     end)
 end
 
-local function safeRequire(url)
-    return safeRequireRemote(url)
+-- ─── Módulos principais ───────────────────────────────────────────────────────
+
+local function safeLoad(path, name)
+    loadingScreen:step(name)
+    return safeRequireRemote(BRAZIL_HUB_BASE_URL .. path, name)
 end
 
--- Load main-modules
-loadingScreen:step("ForceFieldManager")
-local FFDetector = safeRequire(BRAZIL_HUB_BASE_URL .. "Modules/ForceField/Core/ForceFieldManager")
+local FFDetector       = safeLoad("Modules/ForceField/Core/ForceFieldManager", "ForceFieldManager")
+local PlayerESP        = safeLoad("PlayerESPHandler",    "PlayerESP")
+local AutoAim          = safeLoad("Auto-Aim",            "Auto-Aim")
+local BetterLeaderboard = safeLoad("betterleaderboard",  "BetterLeaderboard")
+local TrinketESP       = safeLoad("trinket_esp_handler", "TrinketESP")
+local NoFog            = safeLoad("NoFog",               "NoFog")
+local Intent           = safeLoad("Intent",              "Intent")
+local AutoBlock        = safeLoad("auto_block",          "AutoBlock")
+local TriggerMonitor   = safeLoad("TriggerMonitor",      "TriggerMonitor")
+local PerformanceMonitor = safeLoad("PerformanceMonitor","PerformanceMonitor")
+local FOVCircleManager = safeLoad("FOVCircleManager",    "FOVCircleManager")
+local ConnectionManager = safeLoad("ConnectionManager",  "ConnectionManager")
+local UtilsService     = safeLoad("UtilsService",        "UtilsService")
 
-loadingScreen:step("PlayerESP")
-local PlayerESP = safeRequire(BRAZIL_HUB_BASE_URL .. "PlayerESPHandler")
-
-loadingScreen:step("Auto-Aim")
-local AutoAim = safeRequire(BRAZIL_HUB_BASE_URL .. "Auto-Aim")
-
-loadingScreen:step("BetterLeaderboard")
-local BetterLeaderboard = safeRequire(BRAZIL_HUB_BASE_URL .. "betterleaderboard")
-
-loadingScreen:step("TrinketESP")
-local TrinketESP = safeRequire(BRAZIL_HUB_BASE_URL .. "trinket_esp_handler")
-
-loadingScreen:step("NoFog")
-local NoFog = safeRequire(BRAZIL_HUB_BASE_URL .. "NoFog")
-
-loadingScreen:step("Intent")
-local Intent = safeRequire(BRAZIL_HUB_BASE_URL .. "Intent")
-
-loadingScreen:step("AutoBlock")
-local AutoBlock = safeRequire(BRAZIL_HUB_BASE_URL .. "auto_block")
-
-loadingScreen:step("TriggerMonitor")
-local TriggerMonitor = safeRequire(BRAZIL_HUB_BASE_URL .. "TriggerMonitor")
-
-loadingScreen:step("PerformanceMonitor")
-local PerformanceMonitor = safeRequire(BRAZIL_HUB_BASE_URL .. "PerformanceMonitor")
-
--- Load sub-modules
-loadingScreen:step("FOVCircleManager")
-local FOVCircleManager = safeRequire(BRAZIL_HUB_BASE_URL .. "FOVCircleManager")
-
--- Load util-modules
-loadingScreen:step("ConnectionManager")
-local ConnectionManager = safeRequire(BRAZIL_HUB_BASE_URL .. "ConnectionManager")
-
-loadingScreen:step("UtilsService")
-local UtilsService = safeRequire(BRAZIL_HUB_BASE_URL .. "UtilsService")
+-- ─── ConnectionManager global ─────────────────────────────────────────────────
 
 local connMgr = ConnectionManager and ConnectionManager.new() or nil
 if connMgr then
     pcall(function()
         game:BindToClose(function()
-            connMgr:dumpToFile("BrazilHub/connection_logs/connections_" .. os.date("%Y%m%d_%H%M%S") .. ".txt")
+            connMgr:dumpToFile(
+                "BrazilHub/connection_logs/connections_" .. os.date("%Y%m%d_%H%M%S") .. ".txt"
+            )
         end)
     end)
 end
 
--- Helper para instanciar módulos com segurança
-local function safeNew(module, name)
-    if module and type(module.new) == "function" then
-        local ok, inst = pcall(function() return module.new() end)
-        if ok then
-            return inst
-        else
-            warn("[BrazilHub] Erro ao instanciar módulo:", name, inst)
-            return nil
-        end
-    else
-        warn("[BrazilHub] Módulo não carregado ou não possui .new():", name)
+-- ─── Instâncias de módulos ────────────────────────────────────────────────────
+
+local function safeNew(module, name, ...)
+    if not (module and type(module.new) == "function") then
+        warn("[BrazilHub] Módulo não carregado ou sem .new():", name)
         return nil
     end
+    local ok, inst = pcall(module.new, module, ...)
+    if not ok then
+        warn("[BrazilHub] Erro ao instanciar:", name, inst)
+        return nil
+    end
+    return inst
 end
 
 local ModuleInstances = {
-    ffDetector = safeNew(FFDetector, "FFDetector"),
-    playerEsp = safeNew(PlayerESP, "PlayerESP"),
-    autoAim = safeNew(AutoAim, "AutoAim"),
+    ffDetector        = safeNew(FFDetector,        "FFDetector"),
+    playerEsp         = safeNew(PlayerESP,         "PlayerESP"),
+    autoAim           = safeNew(AutoAim,           "AutoAim"),
     betterLeaderboard = safeNew(BetterLeaderboard, "BetterLeaderboard"),
-    trinketEsp = safeNew(TrinketESP, "TrinketESP"),
-    autoBlock = safeNew(AutoBlock, "AutoBlock")
+    trinketEsp        = safeNew(TrinketESP,        "TrinketESP"),
+    autoBlock         = safeNew(AutoBlock,         "AutoBlock"),
 }
 
--- Verifica se todos os módulos principais foram carregados corretamente
-local failedModules = {}
-for name, inst in pairs(ModuleInstances) do
-    if not inst then
-        table.insert(failedModules, name)
-    end
-end
-
-if #failedModules == 0 then
-    print("[BrazilHub] All modules loaded successfully.")
-else
-    warn("[BrazilHub] Some modules failed to load:", table.concat(failedModules, ", "))
-end
-
--- ========================================
--- MODULE INSTANCES AND CONFIGURATION
--- ========================================
-
--- Configuration constants
-local CONFIG = {
-    AUTO_AIM = {
-        AVAILABLE_TOOLS = {"Fimbulvetr", "Perflora", "Armis", "Grapple", "Percutiens", "Inferi"},
-        DEFAULT_FOV = 20,
-        DEFAULT_RANGE = 200,
-        DEFAULT_TIME_TO_HIT = 0.15,
-        DEFAULT_STUDS_BEHIND = {min = 20, max = 30}
-    },
-    FOV_CIRCLE = {
-        DEFAULT_COLOR = Color3.fromRGB(0, 255, 128),
-        STROKE_THICKNESS = 2,
-        TRANSPARENCY = 0.3
-    },
-    PLAYER_ESP = {
-        DEFAULT_TEXT_SIZE = 14,
-        DEFAULT_TEXT_COLOR = Color3.new(1, 1, 1)
-    },
-    FF_DETECTOR = {
-        DEFAULT_BILLBOARD_DISTANCE = 125,
-        DEFAULT_BILLBOARD_TEXT_SIZE = 18
-    }
-}
-
--- Function to update PlayerESPHandler with current config
-local function applyPlayerESPConfig()
-    if ModuleInstances.playerEsp and ModuleInstances.playerEsp.setDisplayConfig then
-        ModuleInstances.playerEsp:setDisplayConfig()
-    end
-end
-
--- ========================================
--- UI WINDOW AND TABS SETUP
--- ========================================
-
-local function createMainWindow()
-    return Library:CreateWindow({
-        Title = '[Brazil Hub]',
-    Center = true,
-    AutoShow = true,
-    TabPadding = 8,
-    MenuFadeTime = 0.2
-})
-end
-
-local function setupTabs(window)
-    return {
-        Combat = window:AddTab('Combat'),
-        Visuals = window:AddTab('Visuals'),
-        Misc = window:AddTab('Misc'),
-        UISettings = window:AddTab('UI Settings'),
-    }
-end
-
--- Load FOV Circle Manager module
-
--- Initialize Trigger Monitor
 local triggerMonitor = TriggerMonitor and TriggerMonitor.new(connMgr) or nil
 
--- ========================================
--- UI CALLBACK HANDLERS
--- ========================================
+do
+    local failed = {}
+    for name, inst in pairs(ModuleInstances) do
+        if not inst then failed[#failed+1] = name end
+    end
+    if #failed == 0 then
+        print("[BrazilHub] Todos os módulos carregados.")
+    else
+        warn("[BrazilHub] Módulos com falha:", table.concat(failed, ", "))
+    end
+end
+
+-- ─── Configuração ─────────────────────────────────────────────────────────────
+
+local CONFIG = {
+    AUTO_AIM = {
+        AVAILABLE_TOOLS  = { "Fimbulvetr","Perflora","Armis","Grapple","Percutiens","Inferi" },
+        DEFAULT_FOV      = 20,
+        DEFAULT_RANGE    = 200,
+        DEFAULT_TIME_TO_HIT = 0.15,
+        DEFAULT_STUDS_BEHIND = { min = 20, max = 30 },
+    },
+    FOV_CIRCLE = {
+        DEFAULT_COLOR     = Color3.fromRGB(0, 255, 128),
+        STROKE_THICKNESS  = 2,
+        TRANSPARENCY      = 0.3,
+    },
+    PLAYER_ESP = {
+        DEFAULT_TEXT_SIZE  = 14,
+        DEFAULT_TEXT_COLOR = Color3.new(1, 1, 1),
+    },
+    FF_DETECTOR = {
+        DEFAULT_BILLBOARD_DISTANCE  = 125,
+        DEFAULT_BILLBOARD_TEXT_SIZE = 18,
+    },
+}
+
+-- ─── UI Callbacks ─────────────────────────────────────────────────────────────
 
 local UICallbacks = {}
 
--- FF Detector callbacks
-function UICallbacks.onToggleFFDetector(enabled)
-    if enabled then
-        ModuleInstances.ffDetector:enable()
-        print("[FF Detector] Enabled")
-    else
-        ModuleInstances.ffDetector:disable()
-        print("[FF Detector] Disabled")
-    end
+function UICallbacks.onToggleFFDetector(e)
+    if e then ModuleInstances.ffDetector:enable() else ModuleInstances.ffDetector:disable() end
 end
-
-function UICallbacks.onBillboardDistanceChanged(value)
-    ModuleInstances.ffDetector:setBillboardMaxDistance(value)
+function UICallbacks.onBillboardDistanceChanged(v)
+    ModuleInstances.ffDetector:setBillboardMaxDistance(v)
 end
-
-function UICallbacks.onBillboardTextSizeChanged(value)
-    ModuleInstances.ffDetector:setBillboardTextSize(value)
+function UICallbacks.onBillboardTextSizeChanged(v)
+    ModuleInstances.ffDetector:setBillboardTextSize(v)
 end
-
--- Player ESP callbacks
-function UICallbacks.onTogglePlayerESP(enabled)
-    if enabled then
-        ModuleInstances.playerEsp:enable()
-        print("[Player ESP] Enabled")
-    else
-        ModuleInstances.playerEsp:disable()
-        print("[Player ESP] Disabled")
-    end
+function UICallbacks.onTogglePlayerESP(e)
+    if e then ModuleInstances.playerEsp:enable() else ModuleInstances.playerEsp:disable() end
 end
-
-function UICallbacks.onPlayerESPTextSizeChanged(value)
-    ModuleInstances.playerEsp:setTextSize(value)
+function UICallbacks.onPlayerESPTextSizeChanged(v)  ModuleInstances.playerEsp:setTextSize(v) end
+function UICallbacks.onPlayerESPTextColorChanged(v) ModuleInstances.playerEsp:setTextColor(v) end
+function UICallbacks.onToggleAutoAim(e)
+    if e then ModuleInstances.autoAim:enable() else ModuleInstances.autoAim:disable() end
 end
-
-function UICallbacks.onPlayerESPTextColorChanged(value)
-    ModuleInstances.playerEsp:setTextColor(value)
-end
-
--- Auto-Aim callbacks
-function UICallbacks.onToggleAutoAim(enabled)
-    if enabled then
-        ModuleInstances.autoAim:enable()
-        print("[Auto-Aim] Enabled")
-    else
-        ModuleInstances.autoAim:disable()
-        print("[Auto-Aim] Disabled")
-    end
-end
-
-function UICallbacks.onAutoAimFOVChanged(value)
-    ModuleInstances.autoAim:setFOV(value)
-end
-
-function UICallbacks.onAutoAimToolsChanged(selectedTools)
-    ModuleInstances.autoAim:setTools(selectedTools)
-end
-
-function UICallbacks.onStudsBehindMinChanged(value)
-    CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min = value
+function UICallbacks.onAutoAimFOVChanged(v)         ModuleInstances.autoAim:setFOV(v) end
+function UICallbacks.onAutoAimToolsChanged(tools)   ModuleInstances.autoAim:setTools(tools) end
+function UICallbacks.onStudsBehindMinChanged(v)
+    CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min = v
     ModuleInstances.autoAim:setStudsBehindRange(
-        CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 
+        CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
         CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max
     )
 end
-
-function UICallbacks.onStudsBehindMaxChanged(value)
-    CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max = value
+function UICallbacks.onStudsBehindMaxChanged(v)
+    CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max = v
     ModuleInstances.autoAim:setStudsBehindRange(
-        CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 
+        CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
         CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max
     )
 end
-
--- Better Leaderboard callbacks
-function UICallbacks.onToggleBetterLeaderboard(enabled)
-    if enabled then
-        ModuleInstances.betterLeaderboard:enable()
-        print("[Better Leaderboard] Enabled")
-    else
-        ModuleInstances.betterLeaderboard:disable()
-        print("[Better Leaderboard] Disabled")
-    end
+function UICallbacks.onToggleBetterLeaderboard(e)
+    if e then ModuleInstances.betterLeaderboard:enable()
+    else ModuleInstances.betterLeaderboard:disable() end
+end
+function UICallbacks.onToggleTrinketESP(e)
+    if e then ModuleInstances.trinketEsp:enable() else ModuleInstances.trinketEsp:disable() end
+end
+function UICallbacks.onToggleNoFog(e)
+    if e then NoFog:enable() else NoFog:disable() end
+end
+function UICallbacks.onToggleIntentBillboard(e)
+    if e then Intent.enable() else Intent.disable() end
+end
+function UICallbacks.onToggleAutoBlock(e)
+    if e then ModuleInstances.autoBlock:enable() else ModuleInstances.autoBlock:disable() end
 end
 
--- Trinket ESP callbacks
-function UICallbacks.onToggleTrinketESP(enabled)
-    if enabled then
-        ModuleInstances.trinketEsp:enable()
-        print("[Trinket ESP] Enabled")
-    else
-        ModuleInstances.trinketEsp:disable()
-        print("[Trinket ESP] Disabled")
-    end
-end
-
--- NoFog callbacks
-function UICallbacks.onToggleNoFog(enabled)
-    if enabled then
-        NoFog:enable()
-        print("[NoFog] Enabled")
-    else
-        NoFog:disable()
-        print("[NoFog] Disabled")
-    end
-end
-
--- Intent Billboard toggle
-function UICallbacks.onToggleIntentBillboard(enabled)
-    if enabled then
-        Intent.enable()
-    else
-        Intent.disable()
-    end
-end
-
--- AutoBlock callbacks
-function UICallbacks.onToggleAutoBlockGrapple(enabled)
-    if enabled then
-        ModuleInstances.autoBlock:enable()
-        print("[AutoBlock Grapple] Enabled")
-    else
-        ModuleInstances.autoBlock:disable()
-        print("[AutoBlock Grapple] Disabled")
-    end
-end
-
--- ========================================
--- UI COMPONENT CREATION (Organized by Category)
--- ========================================
+-- ─── Combat Tab ───────────────────────────────────────────────────────────────
 
 local function createCombatTab(combatTab, fovManager)
-    -- ── Auto-Aim ──
-    local autoAimGroup = combatTab:AddLeftGroupbox('Auto-Aim')
-    
-    autoAimGroup:AddToggle('AutoAimToggle', {
-        Text = 'Auto-Aim',
-        Default = false,
-        Tooltip = 'Enable or disable Auto-Aim functionality',
-        Callback = UICallbacks.onToggleAutoAim
+    local autoAimGroup = combatTab:AddLeftGroupbox("Auto-Aim")
+
+    autoAimGroup:AddToggle("AutoAimToggle", {
+        Text     = "Auto-Aim",
+        Default  = false,
+        Tooltip  = "Ativar/desativar Auto-Aim",
+        Callback = UICallbacks.onToggleAutoAim,
     })
-    autoAimGroup:AddSlider('AutoAimFOV', {
-        Text = 'Auto-Aim FOV (degrees)',
-        Default = CONFIG.AUTO_AIM.DEFAULT_FOV,
-        Min = 5,
-        Max = 90,
-        Rounding = 0,
-        Tooltip = 'Field of view for auto-aim (larger = wider range)',
-        Callback = UICallbacks.onAutoAimFOVChanged
+    autoAimGroup:AddSlider("AutoAimFOV", {
+        Text     = "Auto-Aim FOV (graus)",
+        Default  = CONFIG.AUTO_AIM.DEFAULT_FOV,
+        Min = 5, Max = 90, Rounding = 0,
+        Callback = UICallbacks.onAutoAimFOVChanged,
     })
-    autoAimGroup:AddLabel('FOV Circle Color'):AddColorPicker('FOVCircleColor', {
-        Default = CONFIG.FOV_CIRCLE.DEFAULT_COLOR,
-        Title = 'FOV Circle Color',
+    autoAimGroup:AddLabel("FOV Circle Color"):AddColorPicker("FOVCircleColor", {
+        Default  = CONFIG.FOV_CIRCLE.DEFAULT_COLOR,
+        Title    = "FOV Circle Color",
         Callback = function(color)
-            if fovManager then
-                fovManager:setColor(color)
-            end
-        end
+            if fovManager then fovManager:setColor(color) end
+        end,
     })
-    autoAimGroup:AddToggle('ShowFOVCircle', {
-        Text = 'Show FOV Circle',
-        Default = false,
-        Tooltip = 'Display or hide the auto-aim FOV circle',
-        Callback = function(visible)
-            if fovManager then
-                fovManager:setVisible(visible)
-            end
-        end
+    autoAimGroup:AddToggle("ShowFOVCircle", {
+        Text     = "Show FOV Circle",
+        Default  = false,
+        Callback = function(v)
+            if fovManager then fovManager:setVisible(v) end
+        end,
     })
-    autoAimGroup:AddSlider('StudsBehindMin', {
-        Text = 'Studs Behind Min',
-        Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
-        Min = 5,
-        Max = 50,
-        Rounding = 0,
-        Callback = UICallbacks.onStudsBehindMinChanged
+    autoAimGroup:AddSlider("StudsBehindMin", {
+        Text = "Studs Behind Min", Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
+        Min = 5, Max = 50, Rounding = 0, Callback = UICallbacks.onStudsBehindMinChanged,
     })
-    autoAimGroup:AddSlider('StudsBehindMax', {
-        Text = 'Studs Behind Max',
-        Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max,
-        Min = 5,
-        Max = 50,
-        Rounding = 0,
-        Callback = UICallbacks.onStudsBehindMaxChanged
+    autoAimGroup:AddSlider("StudsBehindMax", {
+        Text = "Studs Behind Max", Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max,
+        Min = 5, Max = 50, Rounding = 0, Callback = UICallbacks.onStudsBehindMaxChanged,
     })
-    
-    -- Tool selection
-    local function getAvailableToolsFromBackpack()
-        return CONFIG.AUTO_AIM.AVAILABLE_TOOLS
-    end
-    local function extractToolNamesFromDisplay(displayNames)
-        local cleanNames = {}
-        for _, displayName in ipairs(displayNames) do
-            local toolName = displayName:gsub(" %[Equipped%]$", ""):gsub(" %[Backpack%]$", "")
-            table.insert(cleanNames, toolName)
-        end
-        return cleanNames
-    end
-    local availableTools = getAvailableToolsFromBackpack()
-    autoAimGroup:AddDropdown('AutoAimTools', {
-        Values = availableTools,
-        Default = 1,
-        Multi = true,
-        Text = 'Auto-Aim Tools',
-        Tooltip = 'Select which tools activate auto-aim',
+    autoAimGroup:AddDropdown("AutoAimTools", {
+        Values   = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+        Default  = 1,
+        Multi    = true,
+        Text     = "Auto-Aim Tools",
         Callback = function(selected)
-            local cleanSelected = extractToolNamesFromDisplay(selected)
-            UICallbacks.onAutoAimToolsChanged(cleanSelected)
-        end
+            local clean = {}
+            for _, name in ipairs(selected) do
+                clean[#clean+1] = name:gsub(" %[Equipped%]$",""):gsub(" %[Backpack%]$","")
+            end
+            UICallbacks.onAutoAimToolsChanged(clean)
+        end,
     })
-    
-    -- Initialize Auto-Aim default values
+
     ModuleInstances.autoAim:setRange(CONFIG.AUTO_AIM.DEFAULT_RANGE)
     ModuleInstances.autoAim:setTimeToHit(CONFIG.AUTO_AIM.DEFAULT_TIME_TO_HIT)
     ModuleInstances.autoAim:setStudsBehindRange(
         CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
         CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max
     )
-    
-    -- ── Auto Block ──
-    local autoBlockGroup = combatTab:AddRightGroupbox('Auto Block')
-    
-    autoBlockGroup:AddToggle('AutoBlockGrapple', {
-        Text = 'Auto Block',
-        Default = false,
-        Tooltip = 'Bloqueia automaticamente ataques selecionados',
-        Callback = UICallbacks.onToggleAutoBlockGrapple
+
+    local autoBlockGroup = combatTab:AddRightGroupbox("Auto Block")
+    autoBlockGroup:AddToggle("AutoBlockGrapple", {
+        Text     = "Auto Block",
+        Default  = false,
+        Tooltip  = "Bloqueia automaticamente ataques selecionados",
+        Callback = UICallbacks.onToggleAutoBlock,
     })
-    
-    local allThreats = ModuleInstances.autoBlock:getAllThreats()
-    local skillOptions, attackTypeOptions = {}, {}
+
+    local allThreats     = ModuleInstances.autoBlock:getAllThreats()
+    local skillOptions   = {}
+    local attackOptions  = {}
     local threatIdByName = {}
-    for threatId, config in pairs(allThreats) do
-        threatIdByName[config.name] = threatId
-        if config.category == "skills" then
-            table.insert(skillOptions, config.name)
-        elseif config.category == "attack_type" then
-            table.insert(attackTypeOptions, config.name)
+
+    for threatId, cfg in pairs(allThreats) do
+        threatIdByName[cfg.name] = threatId
+        if cfg.category == "skills" then
+            skillOptions[#skillOptions+1] = cfg.name
+        elseif cfg.category == "attack_type" then
+            attackOptions[#attackOptions+1] = cfg.name
         end
     end
-    
-    autoBlockGroup:AddDropdown('SkillsDropdown', {
-        Values = skillOptions,
-        Default = skillOptions,
-        Multi = true,
-        Text = 'Skills',
-        Tooltip = 'Selecione skills para bloquear',
-        Callback = function(selected)
-            for _, name in ipairs(skillOptions) do
-                local threatId = threatIdByName[name]
-                if selected[name] then
-                    ModuleInstances.autoBlock:addThreat(threatId, allThreats[threatId])
-                else
-                    ModuleInstances.autoBlock:removeThreat(threatId)
-                end
+
+    local function applyThreatDropdown(options, selected)
+        for _, name in ipairs(options) do
+            local id = threatIdByName[name]
+            if selected[name] then
+                ModuleInstances.autoBlock:addThreat(id, allThreats[id])
+            else
+                ModuleInstances.autoBlock:removeThreat(id)
             end
         end
+    end
+
+    autoBlockGroup:AddDropdown("SkillsDropdown", {
+        Values   = skillOptions, Default = skillOptions, Multi = true, Text = "Skills",
+        Callback = function(sel) applyThreatDropdown(skillOptions, sel) end,
     })
-    autoBlockGroup:AddDropdown('AttackTypesDropdown', {
-        Values = attackTypeOptions,
-        Default = attackTypeOptions,
-        Multi = true,
-        Text = 'Attack Types',
-        Tooltip = 'Selecione tipos de ataque para bloquear',
-        Callback = function(selected)
-            for _, name in ipairs(attackTypeOptions) do
-                local threatId = threatIdByName[name]
-                if selected[name] then
-                    ModuleInstances.autoBlock:addThreat(threatId, allThreats[threatId])
-                else
-                    ModuleInstances.autoBlock:removeThreat(threatId)
-                end
-            end
-        end
+    autoBlockGroup:AddDropdown("AttackTypesDropdown", {
+        Values   = attackOptions, Default = attackOptions, Multi = true, Text = "Attack Types",
+        Callback = function(sel) applyThreatDropdown(attackOptions, sel) end,
     })
-    
-    for threatId, config in pairs(allThreats) do
-        local sliderLabel = string.format("%s Block Dist", config.name)
-        autoBlockGroup:AddSlider(sliderLabel, {
-            Text = sliderLabel,
-            Default = config.blockDistance or 50,
-            Min = 5,
-            Max = 300,
-            Rounding = 0,
-            Tooltip = string.format("Distância de bloqueio para %s", config.name),
-            Callback = function(val)
-                ModuleInstances.autoBlock:setThreatBlockDistance(threatId, val)
-            end
+
+    for threatId, cfg in pairs(allThreats) do
+        local lbl = cfg.name .. " Block Dist"
+        autoBlockGroup:AddSlider(lbl, {
+            Text     = lbl,
+            Default  = cfg.blockDistance or 50,
+            Min = 5, Max = 300, Rounding = 0,
+            Callback = function(v)
+                ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
+            end,
         })
     end
 end
 
+-- ─── Visuals Tab ──────────────────────────────────────────────────────────────
+
 local function createVisualsTab(visualsTab)
-    -- ── Player ESP ──
-    local playerESPGroup = visualsTab:AddLeftGroupbox('Player ESP')
-    
-    local playerESPToggle = playerESPGroup:AddToggle('PlayerESP', {
-        Text = 'Player ESP',
-        Default = true,
-        Tooltip = 'Display player information (name, rogue, edict, HP)',
-        Callback = UICallbacks.onTogglePlayerESP
+    local espGroup = visualsTab:AddLeftGroupbox("Player ESP")
+
+    local espToggle = espGroup:AddToggle("PlayerESP", {
+        Text     = "Player ESP",
+        Default  = true,
+        Callback = UICallbacks.onTogglePlayerESP,
     })
-    if playerESPToggle.Value then
-        UICallbacks.onTogglePlayerESP(true)
-    end
+    if espToggle.Value then UICallbacks.onTogglePlayerESP(true) end
+
     if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
         for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
-            local labelText = configKey:gsub("show", ""):gsub("^%l", string.upper)
-            local toggleName = configKey:gsub("show", "Show")
-            playerESPGroup:AddToggle(toggleName, {
-                Text = labelText,
-                Default = defaultValue,
+            local labelText  = configKey:gsub("show",""):gsub("^%l", string.upper)
+            local toggleName = configKey:gsub("show","Show")
+            espGroup:AddToggle(toggleName, {
+                Text     = labelText,
+                Default  = defaultValue,
                 Callback = function(val)
                     ModuleInstances.playerEsp.displayConfig[configKey] = val
-                    applyPlayerESPConfig()
-                end
+                    if ModuleInstances.playerEsp.setDisplayConfig then
+                        ModuleInstances.playerEsp:setDisplayConfig()
+                    end
+                end,
             })
         end
     end
-    playerESPGroup:AddSlider('PlayerESPTextSize', {
-        Text = 'Text Size',
-        Default = CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE,
-        Min = 7,
-        Max = 40,
-        Rounding = 0,
-        Callback = UICallbacks.onPlayerESPTextSizeChanged
+    espGroup:AddSlider("PlayerESPTextSize", {
+        Text = "Text Size", Default = CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE,
+        Min = 7, Max = 40, Rounding = 0, Callback = UICallbacks.onPlayerESPTextSizeChanged,
     })
-    playerESPGroup:AddLabel('Text Color'):AddColorPicker('PlayerESPTextColor', {
-        Default = CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
-        Title = 'Player ESP Text Color',
-        Callback = UICallbacks.onPlayerESPTextColorChanged
+    espGroup:AddLabel("Text Color"):AddColorPicker("PlayerESPTextColor", {
+        Default  = CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
+        Title    = "Player ESP Text Color",
+        Callback = UICallbacks.onPlayerESPTextColorChanged,
     })
     ModuleInstances.playerEsp:setTextSize(CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE)
     ModuleInstances.playerEsp:setTextColor(CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR)
-    applyPlayerESPConfig()
-    
-    -- ── Indicators ──
-    local indicatorsGroup = visualsTab:AddLeftGroupbox('Indicators')
-    
-    local Indicator = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "Indicator", 'Indicator')
+
+    local indicatorsGroup = visualsTab:AddLeftGroupbox("Indicators")
+    local Indicator = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "Indicator", "Indicator")
     local indicator = Indicator and Indicator.new and Indicator.new() or nil
-    
+
     if indicator then
-        indicatorsGroup:AddToggle('EnableDamageIndicators', {
-            Text = 'Damage Indicators',
-            Default = true,
-            Tooltip = 'Exibe números de dano flutuantes acima dos personagens',
-            Callback = function(val)
-                indicator.showDamage = val
-                -- Enable the system if at least one is active
-                if val or indicator.showHeal then
-                    if not indicator._enabled then indicator:enable() end
-                else
-                    indicator:disable()
-                end
-            end
-        })
-        indicatorsGroup:AddToggle('EnableRegenIndicators', {
-            Text = 'Regen Indicators',
-            Default = false,
-            Tooltip = 'Exibe números de cura flutuantes acima dos personagens',
-            Callback = function(val)
-                indicator.showHeal = val
-                -- Enable the system if at least one is active
-                if val or indicator.showDamage then
-                    if not indicator._enabled then indicator:enable() end
-                else
-                    indicator:disable()
-                end
-            end
-        })
-        
-        -- Start with damage on, regen off
         indicator.showDamage = true
-        indicator.showHeal = false
+        indicator.showHeal   = false
         indicator:enable()
+
+        indicatorsGroup:AddToggle("EnableDamageIndicators", {
+            Text    = "Damage Indicators", Default = true,
+            Callback = function(v)
+                indicator.showDamage = v
+                if v or indicator.showHeal then
+                    if not indicator._enabled then indicator:enable() end
+                else
+                    indicator:disable()
+                end
+            end,
+        })
+        indicatorsGroup:AddToggle("EnableRegenIndicators", {
+            Text    = "Regen Indicators", Default = false,
+            Callback = function(v)
+                indicator.showHeal = v
+                if v or indicator.showDamage then
+                    if not indicator._enabled then indicator:enable() end
+                else
+                    indicator:disable()
+                end
+            end,
+        })
     else
-        indicatorsGroup:AddLabel('Indicators not available')
+        indicatorsGroup:AddLabel("Indicators not available")
     end
-    
-    -- ── FF Detector ──
-    local ffGroup = visualsTab:AddRightGroupbox('FF Detector')
-    
-    local ffToggle = ffGroup:AddToggle('FFDetectorToggle', {
-        Text = 'FF Detector',
-        Default = true,
-        Tooltip = 'Detect and show countdown for player ForceField',
-        Callback = UICallbacks.onToggleFFDetector
+
+    local ffGroup = visualsTab:AddRightGroupbox("FF Detector")
+    local ffToggle = ffGroup:AddToggle("FFDetectorToggle", {
+        Text    = "FF Detector", Default = true,
+        Callback = UICallbacks.onToggleFFDetector,
     })
-    if ffToggle.Value then
-        UICallbacks.onToggleFFDetector(true)
-    end
-    ffGroup:AddSlider('Billboard Max Distance', {
-        Text = 'Billboard Max Dist',
-        Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE,
-        Min = 10,
-        Max = 300,
-        Rounding = 0,
-        Callback = UICallbacks.onBillboardDistanceChanged
+    if ffToggle.Value then UICallbacks.onToggleFFDetector(true) end
+    ffGroup:AddSlider("BillboardMaxDist", {
+        Text = "Billboard Max Dist", Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE,
+        Min = 10, Max = 300, Rounding = 0, Callback = UICallbacks.onBillboardDistanceChanged,
     })
-    ffGroup:AddSlider('Billboard Text Size', {
-        Text = 'Billboard Text Size',
-        Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE,
-        Min = 7,
-        Max = 40,
-        Rounding = 0,
-        Callback = UICallbacks.onBillboardTextSizeChanged
+    ffGroup:AddSlider("BillboardTextSize", {
+        Text = "Billboard Text Size", Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE,
+        Min = 7, Max = 40, Rounding = 0, Callback = UICallbacks.onBillboardTextSizeChanged,
     })
-    
-    -- ── Misc Visuals ──
-    local miscVisualsGroup = visualsTab:AddRightGroupbox('Other')
-    
-    miscVisualsGroup:AddToggle('TrinketESP', {
-        Text = 'Trinket ESP',
-        Default = false,
-        Tooltip = 'Exibe ESP para trinkets (itens) no mapa',
-        Callback = UICallbacks.onToggleTrinketESP
-    })
-    miscVisualsGroup:AddToggle('IntentBillboard', {
-        Text = 'Intent Billboard',
-        Default = false,
-        Tooltip = 'Show a billboard above players with their equipped tool name',
-        Callback = UICallbacks.onToggleIntentBillboard
-    })
-    miscVisualsGroup:AddToggle('BetterLeaderboard', {
-        Text = 'Better Leaderboard',
-        Default = false,
-        Tooltip = 'Improve the leaderboard interface',
-        Callback = UICallbacks.onToggleBetterLeaderboard
-    })
+
+    local otherGroup = visualsTab:AddRightGroupbox("Other")
+    otherGroup:AddToggle("TrinketESP",       { Text = "Trinket ESP",       Default = false, Callback = UICallbacks.onToggleTrinketESP })
+    otherGroup:AddToggle("IntentBillboard",  { Text = "Intent Billboard",  Default = false, Callback = UICallbacks.onToggleIntentBillboard })
+    otherGroup:AddToggle("BetterLeaderboard",{ Text = "Better Leaderboard",Default = false, Callback = UICallbacks.onToggleBetterLeaderboard })
+    otherGroup:AddToggle("NoFogToggle",      { Text = "No Fog",            Default = false, Callback = UICallbacks.onToggleNoFog })
 end
 
+-- ─── Misc Tab ─────────────────────────────────────────────────────────────────
+
 local function createMiscTab(miscTab)
-    -- ── Triggers ──
-    local triggersGroup = miscTab:AddLeftGroupbox('Triggers')
-    
+    local triggersGroup = miscTab:AddLeftGroupbox("Triggers")
+
     if triggerMonitor then
+        -- Alias de compatibilidade (método renomeado na refatoração)
+        if not triggerMonitor.getTriggersLabelText then
+            triggerMonitor.getTriggersLabelText = triggerMonitor._buildLabelText
+        end
+
         local triggersLabel = triggersGroup:AddLabel(triggerMonitor:getTriggersLabelText(), true)
         triggerMonitor:setLabel(triggersLabel)
         triggerMonitor:connectTriggerListeners()
-        
-        triggersGroup:AddToggle('EnableTriggerMonitor', {
-            Text = 'Enable Trigger Monitor',
-            Default = true,
-            Tooltip = 'Enable or disable trigger monitoring (affects performance)',
-            Callback = function(enabled)
-                triggerMonitor:setEnabled(enabled)
-            end
+
+        triggersGroup:AddToggle("EnableTriggerMonitor", {
+            Text     = "Enable Trigger Monitor",
+            Default  = true,
+            Tooltip  = "Ativar/desativar monitoramento de triggers",
+            Callback = function(enabled) triggerMonitor:setEnabled(enabled) end,
         })
         triggerMonitor:setEnabled(true)
     else
         triggersGroup:AddLabel("Trigger Monitor not available", true)
     end
-    
-    -- ── Connections Info ──
-    local connectionsGroup = miscTab:AddRightGroupbox('Connections')
-    local ffLabel = connectionsGroup:AddLabel('FFDetector: ...')
-    local espLabel = connectionsGroup:AddLabel('PlayerESP: ...')
-    local trinketLabel = connectionsGroup:AddLabel('TrinketESP: ...')
-    local leaderboardLabel = connectionsGroup:AddLabel('BetterLB: ...')
-    local nofogLabel = connectionsGroup:AddLabel('NoFog: ...')
-    local intentLabel = connectionsGroup:AddLabel('Intent: ...')
-    local scriptLabel = connectionsGroup:AddLabel('Script: ...')
-    
-    -- Performance Monitor
-    local performanceLabel = connectionsGroup:AddLabel('Performance: disabled')
-    local connectionDetailsLabel
+
+    -- ── Connections Info ──────────────────────────────────────────────────────
+
+    local connGroup = miscTab:AddRightGroupbox("Connections")
+
+    local labels = {
+        ff        = connGroup:AddLabel("FFDetector: ..."),
+        esp       = connGroup:AddLabel("PlayerESP: ..."),
+        trinket   = connGroup:AddLabel("TrinketESP: ..."),
+        lb        = connGroup:AddLabel("BetterLB: ..."),
+        nofog     = connGroup:AddLabel("NoFog: ..."),
+        intent    = connGroup:AddLabel("Intent: ..."),
+        script    = connGroup:AddLabel("Script: ..."),
+        perf      = connGroup:AddLabel("Performance: disabled"),
+    }
+    local detailsLabel = connGroup:AddLabel("Clique numa conexão p/ detalhes", true)
+
+    -- ── Performance Monitor ───────────────────────────────────────────────────
+
     if PerformanceMonitor then
-        local perfMonitor = PerformanceMonitor.new()
-        perfMonitor:setLabel(performanceLabel)
-
-        local memoryKickEnabled = false
-        local memoryThreshold = 3000
-        local memoryTriggered = false
+        local perfMonitor          = PerformanceMonitor.new()
+        local memoryKickEnabled    = false
+        local memoryThreshold      = 3000
+        local memoryTriggered      = false
         local memoryAccumulatedTime = 0
-        local memoryHoldTime = 2.0
+        local memoryHoldTime       = 2.0
 
-        connectionsGroup:AddToggle('EnablePerformanceMonitor', {
-            Text = 'Performance Monitor',
+        perfMonitor:setLabel(labels.perf)
+
+        connGroup:AddToggle("EnablePerformanceMonitor", {
+            Text    = "Performance Monitor",
             Default = false,
-            Tooltip = 'Monitora FPS e uso de memória',
             Callback = function(enabled)
                 if enabled then
                     perfMonitor:start()
                 else
                     perfMonitor:stop()
-                    performanceLabel:SetText('Performance: disabled')
-                    memoryTriggered = false
+                    labels.perf:SetText("Performance: disabled")
+                    memoryTriggered      = false
                     memoryAccumulatedTime = 0
                 end
-            end
+            end,
         })
-
-        connectionsGroup:AddToggle('EnableMemoryAutoKick', {
-            Text = 'Kick on high memory',
+        connGroup:AddToggle("EnableMemoryAutoKick", {
+            Text    = "Kick on high memory",
             Default = false,
-            Tooltip = 'Kick local quando uso de memória exceder o limite configurado',
             Callback = function(enabled)
-                memoryKickEnabled = enabled
-                memoryTriggered = false
+                memoryKickEnabled    = enabled
+                memoryTriggered      = false
                 memoryAccumulatedTime = 0
-            end
+            end,
+        })
+        connGroup:AddSlider("PerformanceMemoryKickThreshold", {
+            Text    = "Memory kick threshold (MB)",
+            Min = 500, Max = 8000, Default = memoryThreshold, Rounding = 0,
+            Callback = function(v) memoryThreshold = v end,
         })
 
-        connectionsGroup:AddSlider('PerformanceMemoryKickThreshold', {
-            Text = 'Memory kick threshold (MB)',
-            Min = 500,
-            Max = 8000,
-            Default = memoryThreshold,
-            Rounding = 0,
-            Callback = function(value)
-                memoryThreshold = value
-            end
-        })
-
-        local function kickForHighMemory(dt)
-            if not memoryKickEnabled or not perfMonitor.isEnabled then
-                return
-            end
-
-            local memoryUsage = perfMonitor:getMemoryUsage()
-            if memoryUsage > 0 and memoryUsage >= memoryThreshold then
+        -- FIX: Heartbeat do memory kick registrado no connMgr para cleanup correto
+        connMgr:add(RunService.Heartbeat:Connect(function(dt)
+            if not memoryKickEnabled or not perfMonitor.isEnabled then return end
+            local mem = perfMonitor:getMemoryUsage()
+            if mem > 0 and mem >= memoryThreshold then
                 memoryAccumulatedTime = memoryAccumulatedTime + (dt or 0)
             else
                 memoryAccumulatedTime = 0
-                memoryTriggered = false
+                memoryTriggered       = false
             end
-
             if memoryAccumulatedTime >= memoryHoldTime and not memoryTriggered then
                 memoryTriggered = true
-                if connectionDetailsLabel then
-                    connectionDetailsLabel:SetText(string.format('Memória alta: %.1f MB ≥ %d MB por %.1fs. Kick ativado.', memoryUsage, memoryThreshold, memoryHoldTime))
-                end
-                local player = game:GetService('Players').LocalPlayer
-                if player and player.Parent then
-                    player:Kick('Brazil Hub: High memory usage detected (' .. string.format('%.1f MB', memoryUsage) .. ')')
+                detailsLabel:SetText(string.format(
+                    "Memória alta: %.1f MB ≥ %d MB. Kick ativado.", mem, memoryThreshold
+                ))
+                local lp = Players.LocalPlayer
+                if lp and lp.Parent then
+                    lp:Kick("Brazil Hub: High memory (" .. string.format("%.1f MB", mem) .. ")")
                 end
             end
-        end
-
-        connMgr:add(game:GetService('RunService').Heartbeat:Connect(function(dt)
-            kickForHighMemory(dt)
-        end))
+        end), "memoryKick.Heartbeat")
     end
 
-    connectionDetailsLabel = connectionsGroup:AddLabel('Clique em uma conexão para ver detalhes', true)
-    local function getConnectionInfo(name, manager)
+    -- ── Connection label updater ──────────────────────────────────────────────
+
+    -- FIX: usa os.clock() em vez de tick(); Heartbeat registrado no connMgr
+    local lastConnUpdate   = 0
+    local CONN_UPDATE_INTERVAL = 2.0
+
+    connMgr:add(RunService.Heartbeat:Connect(function()
+        local now = os.clock()
+        if now - lastConnUpdate < CONN_UPDATE_INTERVAL then return end
+        lastConnUpdate = now
+
+        local function count(inst, key)
+            return inst and inst[key] and inst[key]:count() or 0
+        end
+        labels.ff:SetText(     "FFDetector: "  .. count(ModuleInstances.ffDetector,        "_connMgr"))
+        labels.esp:SetText(    "PlayerESP: "   .. count(ModuleInstances.playerEsp,         "_connMgr"))
+        labels.trinket:SetText("TrinketESP: "  .. count(ModuleInstances.trinketEsp,        "_connectionManager"))
+        labels.lb:SetText(     "BetterLB: "    .. count(ModuleInstances.betterLeaderboard, "_connMgr"))
+        labels.nofog:SetText(  "NoFog: "       .. count(NoFog,                             "_connMgr"))
+        labels.intent:SetText( "Intent: "      .. count(Intent,                            "connectionMgr"))
+        labels.script:SetText( "Script: "      .. (connMgr and connMgr:count() or 0))
+    end), "connLabels.Heartbeat")
+
+    -- ── Click para detalhes ───────────────────────────────────────────────────
+
+    local function getConnInfo(name, manager)
         if not manager then
-            return string.format('%s não está carregado ou não possui ConnectionManager.', name)
+            return name .. ": não carregado ou sem ConnectionManager"
         end
         if manager.getDetails then
             local details = manager:getDetails()
-            if #details == 0 then
-                return string.format('%s: nenhuma conexão registrada', name)
+            if #details == 0 then return name .. ": nenhuma conexão" end
+            local lines = { name .. " (" .. #details .. "):" }
+            for i, d in ipairs(details) do
+                lines[#lines+1] = i .. ". " .. d.name .. " [" .. (d.connected and "ativa" or "inativa") .. "]"
             end
-            local lines = {string.format('%s (%d):', name, #details)}
-            for i, detail in ipairs(details) do
-                table.insert(lines, string.format('%d. %s [%s]', i, detail.name, detail.connected and 'ativa' or 'desconectada'))
-            end
-            return table.concat(lines, '\n')
+            return table.concat(lines, "\n")
         end
-        local count = manager.count and manager:count() or 0
-        return string.format('%s: %d conexão(ões)', name, count)
+        return name .. ": " .. (manager.count and manager:count() or 0) .. " conexão(ões)"
     end
 
-    local function attachConnectionInfo(label, name, manager)
+    local function attachClick(label, name, manager)
         if label.OnClick then
             label:OnClick(function()
-                connectionDetailsLabel:SetText(getConnectionInfo(name, manager))
+                detailsLabel:SetText(getConnInfo(name, manager))
             end)
         end
     end
 
-    attachConnectionInfo(ffLabel, 'FFDetector', ModuleInstances.ffDetector and ModuleInstances.ffDetector._connMgr)
-    attachConnectionInfo(espLabel, 'PlayerESP', ModuleInstances.playerEsp and ModuleInstances.playerEsp._connMgr)
-    attachConnectionInfo(trinketLabel, 'TrinketESP', ModuleInstances.trinketEsp and ModuleInstances.trinketEsp._connectionManager)
-    attachConnectionInfo(leaderboardLabel, 'BetterLB', ModuleInstances.betterLeaderboard and ModuleInstances.betterLeaderboard._connMgr)
-    attachConnectionInfo(nofogLabel, 'NoFog', NoFog and NoFog._connMgr)
-    attachConnectionInfo(intentLabel, 'Intent', Intent and Intent.connectionMgr)
-    attachConnectionInfo(scriptLabel, 'Script', connMgr)
+    attachClick(labels.ff,      "FFDetector", ModuleInstances.ffDetector        and ModuleInstances.ffDetector._connMgr)
+    attachClick(labels.esp,     "PlayerESP",  ModuleInstances.playerEsp         and ModuleInstances.playerEsp._connMgr)
+    attachClick(labels.trinket, "TrinketESP", ModuleInstances.trinketEsp        and ModuleInstances.trinketEsp._connectionManager)
+    attachClick(labels.lb,      "BetterLB",   ModuleInstances.betterLeaderboard and ModuleInstances.betterLeaderboard._connMgr)
+    attachClick(labels.nofog,   "NoFog",      NoFog   and NoFog._connMgr)
+    attachClick(labels.intent,  "Intent",     Intent  and Intent.connectionMgr)
+    attachClick(labels.script,  "Script",     connMgr)
 
-    -- Optimized connection label updater
-    local lastConnectionUpdate = 0
-    local connectionUpdateInterval = 2
-    local function updateConnectionsLabel()
-        local now = tick()
-        if now - lastConnectionUpdate < connectionUpdateInterval then return end
-        lastConnectionUpdate = now
-        
-        ffLabel:SetText('FFDetector: ' .. (ModuleInstances.ffDetector and ModuleInstances.ffDetector._connMgr and ModuleInstances.ffDetector._connMgr:count() or 0))
-        espLabel:SetText('PlayerESP: ' .. (ModuleInstances.playerEsp and ModuleInstances.playerEsp._connMgr and ModuleInstances.playerEsp._connMgr:count() or 0))
-        trinketLabel:SetText('TrinketESP: ' .. (ModuleInstances.trinketEsp and ModuleInstances.trinketEsp._connectionManager and ModuleInstances.trinketEsp._connectionManager:count() or 0))
-        leaderboardLabel:SetText('BetterLB: ' .. (ModuleInstances.betterLeaderboard and ModuleInstances.betterLeaderboard._connMgr and ModuleInstances.betterLeaderboard._connMgr:count() or 0))
-        nofogLabel:SetText('NoFog: ' .. (NoFog and NoFog._connMgr and NoFog._connMgr:count() or 0))
-        intentLabel:SetText('Intent: ' .. (Intent and Intent.connectionMgr and Intent.connectionMgr:count() or 0))
-        scriptLabel:SetText('Script: ' .. (connMgr and connMgr:count() or 0))
-    end
-    
-    local UserInputService = game:GetService('UserInputService')
+    -- FIX: InputBegan registrado no connMgr — não mais órfão
     local isUIVisible = true
-    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    connMgr:add(UserInputService.InputBegan:Connect(function(input)
         if input.KeyCode == Enum.KeyCode.Insert then
             isUIVisible = not isUIVisible
         end
-    end)
-    
-    connMgr:add(game:GetService('RunService').Heartbeat:Connect(function()
-        if isUIVisible then
-            updateConnectionsLabel()
-        end
-    end))
+    end), "UserInput.InsertToggle")
 end
 
+-- ─── UI Settings Tab ──────────────────────────────────────────────────────────
+
 local function createUISettingsTab(uiSettingsTab)
-    local menuGroup = uiSettingsTab:AddLeftGroupbox('Menu')
-    
-    menuGroup:AddButton('Unload', function() 
-        Library:Unload() 
-    end)
-    
-    menuGroup:AddLabel('Menu bind'):AddKeyPicker('MenuKeybind', { 
-        Default = 'Insert', 
-        NoUI = true, 
-        Text = 'Menu keybind' 
+    local menuGroup = uiSettingsTab:AddLeftGroupbox("Menu")
+    menuGroup:AddButton("Unload", function() Library:Unload() end)
+    menuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
+        Default = "Insert", NoUI = true, Text = "Menu keybind",
     })
-    
-    -- Set the toggle keybind for the menu
-    Library.ToggleKeybind = Options.MenuKeybind
+    Library.ToggleKeybind = getgenv().Options.MenuKeybind
 end
 
 local function setupManagers(uiSettingsTab, fovManager)
-    -- Configure ThemeManager and SaveManager
-ThemeManager:SetLibrary(Library)
-SaveManager:SetLibrary(Library)
-
-    -- Configure save settings
-SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
-
-    -- Set folders for themes and configs
-ThemeManager:SetFolder('BrazilHub')
-SaveManager:SetFolder('BrazilHub/Rogue-Lineage')
-
-    -- Build configuration and theme sections
+    ThemeManager:SetLibrary(Library)
+    SaveManager:SetLibrary(Library)
+    SaveManager:IgnoreThemeSettings()
+    SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
+    ThemeManager:SetFolder("BrazilHub")
+    SaveManager:SetFolder("BrazilHub/Rogue-Lineage")
     SaveManager:BuildConfigSection(uiSettingsTab)
     ThemeManager:ApplyToTab(uiSettingsTab)
-    
-    -- Load auto-load configuration
-SaveManager:LoadAutoloadConfig()
-    
-    -- Setup cleanup when script is unloaded
+    SaveManager:LoadAutoloadConfig()
+
     Library.OnUnload = function()
-        if connMgr then
-            pcall(function() connMgr:disconnectAll() end)
-        end
-        if triggerMonitor then
-            pcall(function() triggerMonitor:destroy() end)
-        end
-        if fovManager then
-            pcall(function() fovManager:destroy() end)
-        end
+        -- FIX: reseta flag para permitir recarregamento sem reiniciar executor
+        getgenv().BrazilHubLoaded = false
+
+        pcall(function() connMgr:disconnectAll() end)
+        if triggerMonitor then pcall(function() triggerMonitor:destroy() end) end
+        if fovManager      then pcall(function() fovManager:destroy() end) end
     end
 end
 
--- ========================================
--- MAIN INITIALIZATION
--- ========================================
-
-local function safeEnable(module, name)
-    if module and type(module.enable) == "function" then
-        local ok, err = pcall(function() module:enable() end)
-        if not ok then
-            warn("[BrazilHub] Module enable error:", name)
-            warn(tostring(err))
-        end
-    end
-end
+-- ─── Main ─────────────────────────────────────────────────────────────────────
 
 local function main()
-    -- Create main UI components
     loadingScreen:setStatus("Building UI...")
-    local window = createMainWindow()
-    local tabs = setupTabs(window)
-    
-    -- Initialize FOV circle manager
-    local fovManager = FOVCircleManager and FOVCircleManager.new()
+    local window = Library:CreateWindow({
+        Title       = "[Brazil Hub]",
+        Center      = true,
+        AutoShow    = true,
+        TabPadding  = 8,
+        MenuFadeTime = 0.2,
+    })
+    local tabs = {
+        Combat     = window:AddTab("Combat"),
+        Visuals    = window:AddTab("Visuals"),
+        Misc       = window:AddTab("Misc"),
+        UISettings = window:AddTab("UI Settings"),
+    }
+
+    local fovManager = FOVCircleManager and FOVCircleManager.new() or nil
     if fovManager then
-        -- Set up the update callback to pass the autoAim instance
         fovManager:setUpdateCallback(function()
             fovManager:updateCircle(ModuleInstances.autoAim, connMgr)
         end)
     end
-    
-    -- Setup UI components
-    createCombatTab(tabs.Combat, fovManager)
+
+    createCombatTab(tabs.Combat,     fovManager)
     createVisualsTab(tabs.Visuals)
     createMiscTab(tabs.Misc)
     createUISettingsTab(tabs.UISettings)
     setupManagers(tabs.UISettings, fovManager)
-    
-    -- Dismiss loading screen
+
     loadingScreen:finish()
 end
 
--- Start the script
 main()
 
-local queue = queue_on_teleport or (syn and syn.queue_on_teleport)
-if queue and typeof(queue) == "function" then
-    pcall(function()
-        queue('loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Loader"))()')
-    end)
+-- ─── Queue on teleport ────────────────────────────────────────────────────────
+-- FIX: verifica cada executor de forma segura sem indexar nil
+
+local loaderUrl = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Loader"))()'
+
+local queueFn = nil
+if typeof(getgenv().queue_on_teleport) == "function" then
+    queueFn = getgenv().queue_on_teleport
+elseif typeof(getgenv().syn) == "table"
+    and typeof(getgenv().syn.queue_on_teleport) == "function" then
+    queueFn = getgenv().syn.queue_on_teleport
+end
+
+if queueFn then
+    pcall(queueFn, loaderUrl)
 end
