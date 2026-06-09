@@ -529,7 +529,11 @@ function SaveManager:BuildConfigSection(tab)
             if autoloadOn then persistAutoload() end
         end,
     })
-    configGroup:AddButton("Save Config",  function() self:Save(selectedSlot) end)
+    configGroup:AddButton("Save Config", function()
+        print("[SaveManager] Tentando salvar slot:", selectedSlot)
+        local ok = self:Save(selectedSlot)
+        print("[SaveManager] Save retornou:", ok)
+    end)
     configGroup:AddButton("Load Config",  function() self:Load(selectedSlot) end)
     configGroup:AddToggle("AutoloadConfig", {
         Text     = "Autoload Selected Slot",
