@@ -1201,12 +1201,11 @@ local function createMiscTab(miscTab)
     local scriptLabel = connectionsGroup:AddLabel('Script: ...')
     
     -- Performance Monitor
-    local performanceLabel = connectionsGroup:AddLabel('Performance: ...')
+    local performanceLabel = connectionsGroup:AddLabel('Performance: disabled')
     if PerformanceMonitor then
         local perfMonitor = PerformanceMonitor.new()
         perfMonitor:setLabel(performanceLabel)
-        perfMonitor:start()
-        
+
         connectionsGroup:AddToggle('EnablePerformanceMonitor', {
             Text = 'Performance Monitor',
             Default = false,
@@ -1216,11 +1215,45 @@ local function createMiscTab(miscTab)
                     perfMonitor:start()
                 else
                     perfMonitor:stop()
+                    performanceLabel:SetText('Performance: disabled')
                 end
             end
         })
     end
-    
+
+    local connectionDetailsLabel = connectionsGroup:AddLabel('Clique em uma conexão para ver detalhes', true)
+    local function getConnectionInfo(name, manager)
+        if not manager then
+            return string.format('%s não está carregado ou não possui ConnectionManager.', name)
+        end
+        local count = manager.count and manager:count() or 0
+        local active = 0
+        if manager._conns then
+            for conn in pairs(manager._conns) do
+                if conn.Connected then
+                    active = active + 1
+                end
+            end
+        end
+        return string.format('%s: %d conexão(ões), %d ativas', name, count, active)
+    end
+
+    local function attachConnectionInfo(label, name, manager)
+        if label.OnClick then
+            label:OnClick(function()
+                connectionDetailsLabel:SetText(getConnectionInfo(name, manager))
+            end)
+        end
+    end
+
+    attachConnectionInfo(ffLabel, 'FFDetector', ModuleInstances.ffDetector and ModuleInstances.ffDetector._connMgr)
+    attachConnectionInfo(espLabel, 'PlayerESP', ModuleInstances.playerEsp and ModuleInstances.playerEsp._connMgr)
+    attachConnectionInfo(trinketLabel, 'TrinketESP', ModuleInstances.trinketEsp and ModuleInstances.trinketEsp._connectionManager)
+    attachConnectionInfo(leaderboardLabel, 'BetterLB', ModuleInstances.betterLeaderboard and ModuleInstances.betterLeaderboard._connMgr)
+    attachConnectionInfo(nofogLabel, 'NoFog', NoFog and NoFog._connMgr)
+    attachConnectionInfo(intentLabel, 'Intent', Intent and Intent.connectionMgr)
+    attachConnectionInfo(scriptLabel, 'Script', connMgr)
+
     -- Optimized connection label updater
     local lastConnectionUpdate = 0
     local connectionUpdateInterval = 2
