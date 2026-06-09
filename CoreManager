@@ -364,7 +364,9 @@ function SaveManager:Save(name)
         Options = { __empty = true },
     }
 
+    print("[SaveManager] Toggles encontrados:")
     for id, toggle in pairs(getgenv().Toggles) do
+        print("  ", id, "=", t.Value, "(", type(t.Value), ")")
         if not self.IgnoreIndexes[id] then
             -- toggle.Value pode ser o objeto inteiro; tenta extrair boolean
             local val = toggle.Value
@@ -377,7 +379,9 @@ function SaveManager:Save(name)
         end
     end
 
+    print("[SaveManager] Options encontradas:")
     for id, option in pairs(getgenv().Options) do
+        print("  ", id, "=", tostring(option.Value), "(", typeof(option.Value), ")")
         if not self.IgnoreIndexes[id] then
             local val = option.Value
             -- Desempacota se for wrapper
