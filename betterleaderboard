@@ -419,11 +419,11 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     local charRemovingConn = player.CharacterRemoving:Connect(function()
         playerLabel.TextColor3 = self:_getPlayerLabelColor(player)
     end)
-    self._connMgr:add(mouseConn)
-    self._connMgr:add(charAddedConn)
-    self._connMgr:add(charRemovingConn)
-    self._connMgr:add(hoverEnterConn)
-    self._connMgr:add(hoverLeaveConn)
+    self._connMgr:add(mouseConn, "playerLabel.MouseButton2Click")
+    self._connMgr:add(charAddedConn, "player.CharacterAdded")
+    self._connMgr:add(charRemovingConn, "player.CharacterRemoving")
+    self._connMgr:add(hoverEnterConn, "playerLabel.MouseEnter")
+    self._connMgr:add(hoverLeaveConn, "playerLabel.MouseLeave")
     self._playerLabelConns[player] = {charAddedConn, charRemovingConn, mouseConn, hoverEnterConn, hoverLeaveConn}
 
     return playerLabel
@@ -483,7 +483,7 @@ function BetterLeaderboard:_hideOriginalLeaderboard()
                     originalLeaderboard.Enabled = false
                 end
             end)
-            self._connMgr:add(self._lbEnabledConn)
+            self._connMgr:add(self._lbEnabledConn, "leaderboard.EnabledChanged")
         end
     end
     -- Desabilita imediatamente se já existir
@@ -495,7 +495,7 @@ function BetterLeaderboard:_hideOriginalLeaderboard()
             disableLeaderboard()
         end
     end)
-    self._connMgr:add(self._lbConn)
+    self._connMgr:add(self._lbConn, "playerGui.ChildAdded")
 end
 
 --- Shows the original Roblox leaderboard
@@ -666,7 +666,7 @@ function BetterLeaderboard:enable()
     local playerAddedConn = Players.PlayerAdded:Connect(function(playerObj)
         self:addPlayerFrame(playerObj)
     end)
-    self._connMgr:add(playerAddedConn)
+    self._connMgr:add(playerAddedConn, "Players.PlayerAdded")
     
     -- Connect PlayerRemoving event
     local playerRemovingConn = Players.PlayerRemoving:Connect(function(playerObj)
@@ -694,7 +694,7 @@ function BetterLeaderboard:enable()
         end
         self:_updateCanvasSize()
     end)
-    self._connMgr:add(playerRemovingConn)
+    self._connMgr:add(playerRemovingConn, "Players.PlayerRemoving")
 end
 
 --- Disables the better leaderboard and restores original
