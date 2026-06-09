@@ -1,225 +1,263 @@
 -- FFHandler.lua - Arquitetura Modular com OOP e Otimização de Performance
 
-local Players = game:GetService('Players')
+local Players    = game:GetService('Players')
 local RunService = game:GetService('RunService')
 
 -- Módulos Externos
-local Config = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Config/FFConfig'))()
-local BillboardRenderer = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/BillboardRenderer'))()
-local FFTracker = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/ForceFieldTracker'))()
+local Config               = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Config/FFConfig'))()
+local BillboardRenderer    = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/BillboardRenderer'))()
+local FFTracker            = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/ForceFieldTracker'))()
 local CharacterConnections = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Core/CharacterConnectionManager'))()
-local ConnectionManager = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/ConnectionManager'))()
+local ConnectionManager    = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/ConnectionManager'))()
 
--- Utilitários
-local getTime = tick
+-- FIX: os.clock() em vez de tick() — tick() retorna Unix timestamp (bilhões de segundos),
+--      causando tempos negativos/gigantes no cálculo de elapsed.
+local getTime = os.clock
 
 local function ensureStartTime(ff)
-	local startTime = ff:GetAttribute("StartTime")
-	if not startTime then
-		startTime = getTime()
-		ff:SetAttribute("StartTime", startTime)
-	end
-	return startTime
+    local startTime = ff:GetAttribute("StartTime")
+    if not startTime then
+        startTime = getTime()
+        ff:SetAttribute("StartTime", startTime)
+    end
+    return startTime
 end
+
+-- ─── FFDetector ───────────────────────────────────────────────────────────────
 
 local FFDetector = {}
 FFDetector.__index = FFDetector
 
 function FFDetector.new()
-	local self = setmetatable({}, FFDetector)
+    local self = setmetatable({}, FFDetector)
 
-	self.enabled = false
-	self._connMgr = ConnectionManager.new()
-	self._charConnMgrs = {} -- [Character] = CharacterConnections
-	self._ffConnections = {} -- [FF] = RBXScriptConnection
-	self._billboardRenderer = BillboardRenderer.new()
-	self._ffTracker = FFTracker.new()
+    self.enabled           = false
+    self._connMgr          = ConnectionManager.new()
+    self._charConnMgrs     = {}  -- [Character] = CharacterConnections
+    self._billboardRenderer = BillboardRenderer.new()
+    self._ffTracker        = FFTracker.new()
+    self._lastUpdate       = 0
 
-	self._lastUpdate = 0
-
-	return self
+    return self
 end
 
+-- ─── Dados de ForceField ──────────────────────────────────────────────────────
+
 function FFDetector:removeForceFieldData(character, ff)
-	if not self._charConnMgrs[character] then return end
+    if not self._charConnMgrs[character] then return end
 
-	local trackedFF = self._ffTracker:find(character)
-	if trackedFF == ff then
-		self._ffTracker:remove(character, ff)
+    local trackedFF = self._ffTracker:find(character)
+    if trackedFF ~= ff then return end
 
-		-- Busca por outro FF no personagem
-		for _, child in ipairs(character:GetChildren()) do
-			if child:IsA("ForceField") and child ~= ff then
-				local startTime = ensureStartTime(child)
-				self._ffTracker:set(character, child)
-				self._billboardRenderer:create(character, child, startTime)
+    self._ffTracker:remove(character, ff)
 
-				-- Reconectar monitoramento
-				local charMgr = self._charConnMgrs[character]
-				if charMgr then
-					charMgr:trackFF(child)
-				end
-				return
-			end
-		end
+    -- Busca outro FF no personagem
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("ForceField") and child ~= ff then
+            local startTime = ensureStartTime(child)
+            self._ffTracker:set(character, child)
+            self._billboardRenderer:create(character, child, startTime)
 
-		-- Nenhum FF restante
-		self._billboardRenderer:remove(character)
-	end
+            local charMgr = self._charConnMgrs[character]
+            if charMgr then charMgr:trackFF(child) end
+            return
+        end
+    end
+
+    -- Nenhum FF restante
+    self._billboardRenderer:remove(character)
 end
 
 function FFDetector:clearCharacterData(character)
-	self._billboardRenderer:remove(character)
-	self._ffTracker:clear(character)
+    self._billboardRenderer:remove(character)
+    self._ffTracker:clear(character)
 
-	if self._charConnMgrs[character] then
-		self._charConnMgrs[character]:disconnect()
-		self._charConnMgrs[character] = nil
-	end
+    local mgr = self._charConnMgrs[character]
+    if mgr then
+        mgr:disconnect()
+        self._charConnMgrs[character] = nil
+    end
 end
+
+-- ─── Cleanup ──────────────────────────────────────────────────────────────────
 
 function FFDetector:cleanup()
-	self._connMgr:disconnectAll()
+    self._connMgr:disconnectAll()
 
-	for _, mgr in pairs(self._charConnMgrs) do
-		mgr:disconnect()
-	end
-	self._charConnMgrs = {}
+    for _, mgr in pairs(self._charConnMgrs) do
+        mgr:disconnect()
+    end
+    self._charConnMgrs = {}
 
-	for character in pairs(self._ffTracker:getAll()) do
-		self._billboardRenderer:remove(character)
-	end
+    for character in pairs(self._ffTracker:getAll()) do
+        self._billboardRenderer:remove(character)
+    end
 
-	self._ffTracker:clearAll()
+    self._ffTracker:clearAll()
+
+    -- FIX: recria instâncias para estado limpo após disable/enable
+    self._billboardRenderer = BillboardRenderer.new()
+    self._ffTracker         = FFTracker.new()
 end
+
+-- ─── Eventos de ForceField ────────────────────────────────────────────────────
 
 function FFDetector:onForceFieldAdded(character, ff)
-	local startTime = ensureStartTime(ff)
+    local startTime = ensureStartTime(ff)
 
-	local currentFF = self._ffTracker:find(character)
-	if currentFF == ff then return end
+    local currentFF = self._ffTracker:find(character)
+    if currentFF == ff then return end
 
-	self._ffTracker:set(character, ff)
-	self._billboardRenderer:create(character, ff, startTime)
+    self._ffTracker:set(character, ff)
+    self._billboardRenderer:create(character, ff, startTime)
 
-	local charMgr = self._charConnMgrs[character]
-	if charMgr then
-		charMgr:trackFF(ff)
-	end
+    local charMgr = self._charConnMgrs[character]
+    if charMgr then charMgr:trackFF(ff) end
 end
+
+-- ─── Registro de personagem ───────────────────────────────────────────────────
 
 function FFDetector:registerCharacterFF(character)
-	if not self.enabled then return end
+    if not self.enabled then return end
 
-	-- Cria o gerenciador modular de conexões
-	local manager = CharacterConnections.new(character)
-	manager:setHandlers({
-		onFFAdded = function(ff)
-			self:onForceFieldAdded(character, ff)
-		end,
+    -- Descarta gerenciador anterior se existir
+    local existing = self._charConnMgrs[character]
+    if existing then
+        existing:disconnect()
+        self._charConnMgrs[character] = nil
+    end
 
-		onCharacterRemoved = function()
-			self:clearCharacterData(character)
-		end,
+    local manager = CharacterConnections.new(character)
+    manager:setHandlers({
+        onFFAdded = function(ff)
+            self:onForceFieldAdded(character, ff)
+        end,
+        onCharacterRemoved = function()
+            self:clearCharacterData(character)
+        end,
+        onFFRemoved = function(ff)
+            self:removeForceFieldData(character, ff)
+        end,
+    })
+    manager:watch()
+    self._charConnMgrs[character] = manager
 
-		onFFRemoved = function(ff)
-			self:removeForceFieldData(character, ff)
-		end,
-	})
-	manager:watch()
-	self._charConnMgrs[character] = manager
+    -- Leitura inicial dos FFs já existentes
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("ForceField") then
+            local startTime = ensureStartTime(child)
 
-	-- Força leitura inicial dos FFs já existentes
-	for _, child in ipairs(character:GetChildren()) do
-		if child:IsA("ForceField") then
-			local startTime = ensureStartTime(child)
+            if not self._ffTracker:exists(character) then
+                self._ffTracker:set(character, child)
+            end
 
-			if not self._ffTracker:exists(character) then
-				self._ffTracker:set(character, child)
-			end
-
-			self._billboardRenderer:create(character, child, startTime)
-
-			manager:trackFF(child)
-		end
-	end
+            self._billboardRenderer:create(character, child, startTime)
+            manager:trackFF(child)
+        end
+    end
 end
+
+-- ─── Registro de player ───────────────────────────────────────────────────────
 
 function FFDetector:registerPlayer(player)
-	if player.Character then
-		self:registerCharacterFF(player.Character)
-	end
+    if player.Character then
+        self:registerCharacterFF(player.Character)
+    end
 
-	self._connMgr:add(player.CharacterAdded:Connect(function(character)
-		self:registerCharacterFF(character)
-	end))
+    -- FIX: labels adicionados para facilitar debug e rastreamento
+    self._connMgr:add(
+        player.CharacterAdded:Connect(function(character)
+            self:registerCharacterFF(character)
+        end),
+        player.Name .. ".CharacterAdded"
+    )
 
-	self._connMgr:add(player.CharacterRemoving:Connect(function(character)
-		self:clearCharacterData(character)
-	end))
+    self._connMgr:add(
+        player.CharacterRemoving:Connect(function(character)
+            self:clearCharacterData(character)
+        end),
+        player.Name .. ".CharacterRemoving"
+    )
 end
+
+-- ─── Update de billboards ────────────────────────────────────────────────────
 
 function FFDetector:updateBillboards()
-	local currentTime = getTime()
-	if currentTime - self._lastUpdate < Config.FF.UpdateInterval then return end
-	self._lastUpdate = currentTime
+    local currentTime = getTime()
+    if currentTime - self._lastUpdate < Config.FF.UpdateInterval then return end
+    self._lastUpdate = currentTime
 
-	local toRemove = {}
-	for character, ffData in pairs(self._ffTracker:getAll()) do
-		local ff = ffData.ff
-		if ff and ff.Parent == character then
-			self._billboardRenderer:create(character, ff, ffData.startTime)
-		else
-			toRemove[#toRemove + 1] = character
-		end
-	end
+    local toRemove = {}
+    for character, ffData in pairs(self._ffTracker:getAll()) do
+        local ff = ffData.ff
+        if ff and ff.Parent == character then
+            self._billboardRenderer:create(character, ff, ffData.startTime)
+        else
+            toRemove[#toRemove + 1] = character
+        end
+    end
 
-	for i = 1, #toRemove do
-		local character = toRemove[i]
-		local trackedFF = self._ffTracker:find(character)
-		if trackedFF then
-			self:removeForceFieldData(character, trackedFF)
-		end
-	end
+    for i = 1, #toRemove do
+        local character = toRemove[i]
+        local trackedFF = self._ffTracker:find(character)
+        if trackedFF then
+            self:removeForceFieldData(character, trackedFF)
+        end
+    end
 end
 
+-- ─── Enable / Disable ────────────────────────────────────────────────────────
+
 function FFDetector:enable()
-	if self.enabled then return end
-	self.enabled = true
-	self:cleanup()
+    if self.enabled then return end
+    self.enabled = true
+    self:cleanup()
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		self:registerPlayer(player)
-	end
+    -- FIX: recria connMgr após cleanup para garantir instância limpa
+    self._connMgr = ConnectionManager.new()
 
-	self._connMgr:add(Players.PlayerAdded:Connect(function(player)
-		self:registerPlayer(player)
-	end))
+    for _, player in ipairs(Players:GetPlayers()) do
+        self:registerPlayer(player)
+    end
 
-	self._connMgr:add(Players.PlayerRemoving:Connect(function(player)
-		if player.Character then
-			self:clearCharacterData(player.Character)
-		end
-	end))
+    self._connMgr:add(
+        Players.PlayerAdded:Connect(function(player)
+            self:registerPlayer(player)
+        end),
+        "Players.PlayerAdded"
+    )
 
-	self._connMgr:add(RunService.Heartbeat:Connect(function()
-		self:updateBillboards()
-	end))
+    self._connMgr:add(
+        Players.PlayerRemoving:Connect(function(player)
+            if player.Character then
+                self:clearCharacterData(player.Character)
+            end
+        end),
+        "Players.PlayerRemoving"
+    )
+
+    self._connMgr:add(
+        RunService.Heartbeat:Connect(function()
+            self:updateBillboards()
+        end),
+        "RunService.Heartbeat"
+    )
 end
 
 function FFDetector:disable()
-	if not self.enabled then return end
-	self.enabled = false
-	self:cleanup()
+    if not self.enabled then return end
+    self.enabled = false
+    self:cleanup()
 end
 
--- Métodos públicos para compatibilidade e controle externo
+-- ─── API pública ─────────────────────────────────────────────────────────────
+
 function FFDetector:setBillboardMaxDistance(value)
-	self._billboardRenderer:setMaxDistance(value)
+    self._billboardRenderer:setMaxDistance(value)
 end
 
 function FFDetector:setBillboardTextSize(value)
-	self._billboardRenderer:setTextSize(value)
+    self._billboardRenderer:setTextSize(value)
 end
 
 return FFDetector
