@@ -235,7 +235,7 @@ local function getTrinketInfo(part)
                 return "Ruby"
             elseif colorName == "Bright blue" or colorName == "Cyan" or colorName == "Lapis" or (colorValue.R < 0.3 and colorValue.G < 0.3 and colorValue.B > 0.7) then
                 return "Sapphire"
-            elseif colorName == "Bright green" or colorName == "Lime green" or (colorValue.R < 0.3 and colorValue.G > 0.7 and colorValue.B < 0.3) then
+            elseif colorName == "Bright green" or colorName == "Forest green" or colorName == "Lime green" or (colorValue.R < 0.3 and colorValue.G > 0.7 and colorValue.B < 0.3) then
                 return "Emerald"
             elseif colorName == "White" or colorName == "Institutional white" or (colorValue.R > 0.8 and colorValue.G > 0.8 and colorValue.B > 0.8) then
                 return "Diamond"
