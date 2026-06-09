@@ -1030,9 +1030,10 @@ function RogueUI:CreateWindow(options)
             end
             
             function group_Self:AddLabel(text, isMultiLine)
-                local label = Instance.new("TextLabel")
+                local label = Instance.new("TextButton")
                 label.Name = "Label"
                 label.BackgroundTransparency = 1
+                label.AutoButtonColor = false
                 label.Text = text
                 label.TextColor3 = RogueUI.Theme.TextNormal
                 label.Font = Enum.Font.Garamond
