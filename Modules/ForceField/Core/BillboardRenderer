@@ -1,5 +1,6 @@
 -- FFBillboardRenderer.lua
 -- Handles creation and updates for FF Billboard UI elements
+-- Visual style: Rogue Lineage (medieval parchment, serif font, amber/gold tones)
 
 local Players = game:GetService("Players")
 local Config = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Modules/ForceField/Config/FFConfig'))()
@@ -7,119 +8,183 @@ local Config = loadstring(game:HttpGet('https://raw.githubusercontent.com/Kaic-d
 local FFBillboardRenderer = {}
 FFBillboardRenderer.__index = FFBillboardRenderer
 
+-- ─── Estilo Rogue Lineage ─────────────────────────────────────────────────────
+
+local STYLE = {
+    Font             = Enum.Font.Garamond,
+    BackgroundColor  = Color3.fromRGB(6, 6, 8),
+    BackgroundAlpha  = 0.45,
+    BorderColor      = Color3.fromRGB(115, 95, 65),
+    BorderThickness  = 1,
+    StrokeAlpha      = 0.6,
+    PaddingPx        = 6,
+    CornerRadius     = UDim.new(0, 2),
+    LabelSize        = UDim2.new(1, -12, 1, -8),
+    LabelPosition    = UDim2.new(0, 6, 0, 4),
+    BillboardSize    = UDim2.new(0, 110, 0, 32),
+    BillboardOffset  = Vector3.new(0, 2.4, 0),
+}
+
+-- ─── Cache ────────────────────────────────────────────────────────────────────
+
 local adorneeCache = setmetatable({}, {__mode = "k"})
 
 local function getBestAdornee(character)
-	local cached = adorneeCache[character]
-	if cached and cached.Parent then
-		return cached
-	end
+    local cached = adorneeCache[character]
+    if cached and cached.Parent then return cached end
 
-	local adornee = character:FindFirstChild("Head")
-		or character:FindFirstChild("UpperTorso")
-		or character:FindFirstChild("Torso")
-		or character:FindFirstChildWhichIsA("BasePart")
+    local adornee = character:FindFirstChild("Head")
+        or character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChildWhichIsA("BasePart")
 
-	if adornee then
-		adorneeCache[character] = adornee
-	end
-	return adornee
+    if adornee then adorneeCache[character] = adornee end
+    return adornee
 end
 
-function FFBillboardRenderer.new()
-	local self = setmetatable({}, FFBillboardRenderer)
-	self.billboards = {}
-	self.maxDistance = Config.UI.MaxDistance
-	self.textSize = Config.UI.TextSize
-	return self
-end
+-- ─── Utils ────────────────────────────────────────────────────────────────────
 
 local Utils = loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/UtilsService"))()
 local utils = Utils.new()
 
-function FFBillboardRenderer:getFFColor(timeLeft)
-	return utils:getForceFieldColor(timeLeft)
+-- ─── Constructor ──────────────────────────────────────────────────────────────
+
+function FFBillboardRenderer.new()
+    return setmetatable({
+        billboards  = {},
+        maxDistance = Config.UI.MaxDistance,
+        textSize    = Config.UI.TextSize,
+    }, FFBillboardRenderer)
 end
 
+-- ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function FFBillboardRenderer:getFFColor(timeLeft)
+    return utils:getForceFieldColor(timeLeft)
+end
+
+local function buildBillboard(adornee, maxDistance)
+    -- Container
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name        = "FFBillboard"
+    billboard.Size        = STYLE.BillboardSize
+    billboard.StudsOffset = STYLE.BillboardOffset
+    billboard.AlwaysOnTop = true
+    billboard.MaxDistance = maxDistance
+    billboard.Adornee     = adornee
+    billboard.LightInfluence = 0
+
+    -- Fundo escuro semitransparente
+    local bg = Instance.new("Frame")
+    bg.Name                  = "Background"
+    bg.Size                  = UDim2.new(1, 0, 1, 0)
+    bg.BackgroundColor3      = STYLE.BackgroundColor
+    bg.BackgroundTransparency = STYLE.BackgroundAlpha
+    bg.BorderSizePixel       = 0
+    bg.Parent                = billboard
+
+    -- Borda dourada fina (UIStroke)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color       = STYLE.BorderColor
+    stroke.Thickness   = STYLE.BorderThickness
+    stroke.Transparency = 0
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent      = bg
+
+    -- Cantos levemente arredondados
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = STYLE.CornerRadius
+    corner.Parent       = bg
+
+    -- Linha decorativa superior (estilo RL)
+    local topLine = Instance.new("Frame")
+    topLine.Name             = "TopLine"
+    topLine.Size             = UDim2.new(0.7, 0, 0, 1)
+    topLine.Position         = UDim2.new(0.15, 0, 0, 0)
+    topLine.BackgroundColor3 = STYLE.BorderColor
+    topLine.BorderSizePixel  = 0
+    topLine.Parent           = bg
+
+    -- Label principal
+    local label = Instance.new("TextLabel")
+    label.Name                 = "FFLabel"
+    label.Size                 = STYLE.LabelSize
+    label.Position             = STYLE.LabelPosition
+    label.BackgroundTransparency = 1
+    label.TextStrokeTransparency = STYLE.StrokeAlpha
+    label.TextStrokeColor3     = Color3.fromRGB(0, 0, 0)
+    label.TextScaled           = false
+    label.Font                 = STYLE.Font
+    label.TextXAlignment       = Enum.TextXAlignment.Center
+    label.TextYAlignment       = Enum.TextYAlignment.Center
+    label.Parent               = bg
+
+    return billboard, label
+end
+
+-- ─── API ──────────────────────────────────────────────────────────────────────
+
 function FFBillboardRenderer:create(character, ff, startTime)
-	if not character or not ff or not startTime then return end
+    if not character or not ff or not startTime then return end
 
-	local data = self.billboards[character]
-	local billboard, label
+    local data = self.billboards[character]
+    local billboard, label
 
-	if data and data.billboard and data.label then
-		billboard = data.billboard
-		label = data.label
-	else
-		billboard = Instance.new("BillboardGui")
-		label = Instance.new("TextLabel")
+    if data and data.billboard and data.billboard.Parent and data.label then
+        billboard = data.billboard
+        label     = data.label
+    else
+        local adornee = getBestAdornee(character)
+        if not adornee then return end
+        billboard, label = buildBillboard(adornee, self.maxDistance)
+        billboard.Parent = character
+    end
 
-		billboard.Name = "FFBillboard"
-		billboard.Size = Config.UI.BillboardSize
-		billboard.StudsOffset = Config.UI.BillboardOffset
-		billboard.AlwaysOnTop = true
-		billboard.MaxDistance = self.maxDistance
-		billboard.Adornee = getBestAdornee(character)
+    local elapsed      = os.clock() - startTime
+    local timeLeft     = math.max(0, Config.FF.Duration - elapsed)
+    local formattedText = string.format(Config.Text.Format, timeLeft)
+    local color        = self:getFFColor(timeLeft)
 
-		label.Size = UDim2.new(1, 0, 1, 0)
-		label.BackgroundTransparency = 1
-		label.TextStrokeTransparency = Config.UI.TextStrokeTransparency
-		label.TextScaled = false
-		label.TextSize = self.textSize
-		label.Font = Config.UI.Font
-		label.Parent = billboard
+    if label.Text ~= formattedText then
+        label.Text = formattedText
+    end
+    if label.TextColor3 ~= color then
+        label.TextColor3 = color
+    end
+    if label.TextSize ~= self.textSize then
+        label.TextSize = self.textSize
+    end
 
-		billboard.Parent = character
-	end
-	
-	local elapsed = os.clock() - startTime
-	local timeLeft = math.max(0, Config.FF.Duration - elapsed)
-	local formattedText = string.format(Config.Text.Format, timeLeft)
-	local color = self:getFFColor(timeLeft)
+    billboard.MaxDistance = self.maxDistance
 
-	if label.Text ~= formattedText then
-		label.Text = formattedText
-	end
-	if label.TextColor3 ~= color then
-		label.TextColor3 = color
-	end
-	billboard.MaxDistance = self.maxDistance
-
-	self.billboards[character] = {
-		billboard = billboard,
-		label = label,
-	}
+    self.billboards[character] = { billboard = billboard, label = label }
 end
 
 function FFBillboardRenderer:remove(character)
-	local data = self.billboards[character]
-	if data and data.billboard then
-		data.billboard:Destroy()
-	end
-	self.billboards[character] = nil
-	adorneeCache[character] = nil
+    local data = self.billboards[character]
+    if data and data.billboard then
+        data.billboard:Destroy()
+    end
+    self.billboards[character] = nil
+    adorneeCache[character]    = nil
 end
 
 function FFBillboardRenderer:setTextSize(size)
-	self.textSize = size
-	for _, data in pairs(self.billboards) do
-		if data.label then
-			data.label.TextSize = size
-		end
-	end
+    self.textSize = size
+    for _, data in pairs(self.billboards) do
+        if data.label then data.label.TextSize = size end
+    end
 end
 
 function FFBillboardRenderer:setMaxDistance(distance)
-	self.maxDistance = distance
-	for _, data in pairs(self.billboards) do
-		if data.billboard then
-			data.billboard.MaxDistance = distance
-		end
-	end
+    self.maxDistance = distance
+    for _, data in pairs(self.billboards) do
+        if data.billboard then data.billboard.MaxDistance = distance end
+    end
 end
 
 function FFBillboardRenderer:getBillboards()
-	return self.billboards
+    return self.billboards
 end
 
 return FFBillboardRenderer
