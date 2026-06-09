@@ -4,6 +4,29 @@
 local ConnectionManager = {}
 ConnectionManager.__index = ConnectionManager
 
+local function safeMakeFolder(path)
+    if not makefolder or not isfolder then
+        return
+    end
+    local parts = string.split(path, "/")
+    local current = ""
+    for i = 1, #parts - 1 do
+        current = (current == "") and parts[i] or (current .. "/" .. parts[i])
+        if not isfolder(current) then
+            pcall(makefolder, current)
+        end
+    end
+end
+
+local function safeWriteFile(path, content)
+    if not writefile then
+        return false, "writefile unavailable"
+    end
+    safeMakeFolder(path)
+    local ok, err = pcall(writefile, path, content)
+    return ok, err
+end
+
 -- Cria uma nova instância do ConnectionManager
 function ConnectionManager.new()
     return setmetatable({ _conns = {} }, ConnectionManager)
@@ -45,7 +68,8 @@ function ConnectionManager:add(conn, name)
     if not self._conns[conn] then
         self._conns[conn] = {
             name = name or tostring(conn),
-            conn = conn
+            conn = conn,
+            stack = debug and debug.traceback("", 2) or nil
         }
     end
 end
@@ -88,10 +112,26 @@ function ConnectionManager:getDetails()
     for conn, record in pairs(self._conns) do
         table.insert(details, {
             name = record.name or tostring(conn),
-            connected = conn.Connected
+            connected = conn.Connected,
+            stack = record.stack or ""
         })
     end
     return details
+end
+
+function ConnectionManager:dumpToFile(filename)
+    filename = filename or ("BrazilHub/connection_logs/connections_" .. os.date("%Y%m%d_%H%M%S") .. ".txt")
+    local lines = {}
+    for conn, record in pairs(self._conns) do
+        local connected = tostring(conn.Connected)
+        table.insert(lines, string.format("name=%s connected=%s\nstack=%s\n", record.name, connected, record.stack or ""))
+    end
+    local content = table.concat(lines, "\n")
+    local ok, err = safeWriteFile(filename, content)
+    if not ok then
+        warn("[ConnectionManager] Failed to write dump:", tostring(err))
+    end
+    return ok
 end
 
 return ConnectionManager
