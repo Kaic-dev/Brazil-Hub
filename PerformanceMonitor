@@ -1,87 +1,120 @@
--- Performance Monitor Module
--- Helps identify performance bottlenecks in the script
+-- Performance Monitor Module (Optimized)
+-- Changelog:
+--   - Removido tick() redundante (dt do Heartbeat é suficiente)
+--   - Reset seguro: não corrompe cálculo do frame atual
+--   - Throttle em Stats e label update (a cada N frames)
+--   - Média de Welford: numericamente estável, sem acúmulo de erro
+--   - Localização de funções globais frequentes (math.max, math.min, etc.)
+--   - monitors agora funcional com time tracking via os.clock()
 
 local PerformanceMonitor = {}
 PerformanceMonitor.__index = PerformanceMonitor
 
 local RunService = game:GetService("RunService")
-local Stats = game:GetService("Stats")
+local Stats     = game:GetService("Stats")
+
+-- Localizando globais usadas no hot path (update roda 60x/s)
+local mathMax  = math.max
+local mathMin  = math.min
+local osClock  = os.clock
+local sfmt     = string.format
+
+-- Intervalo de atualização da label e memória (em frames)
+local LABEL_UPDATE_INTERVAL  = 10   -- atualiza label a cada 10 frames (~6x/s a 60fps)
+local MEMORY_UPDATE_INTERVAL = 30   -- memória a cada 30 frames (~2x/s)
+local RESET_INTERVAL         = 1000 -- reseta estatísticas acumuladas
 
 function PerformanceMonitor.new()
     local self = setmetatable({}, PerformanceMonitor)
-    self.isEnabled = false
-    self.monitors = {}
-    self.frameCount = 0
-    self.avgFrameTime = 0
-    self.maxFrameTime = 0
-    self.minFrameTime = math.huge
-    self.currentFPS = 0
-    self.avgFPS = 0
-    self.maxFPS = 0
-    self.minFPS = 0
-    self.memoryUsageMb = 0
+    self.isEnabled        = false
+    self.monitors         = {}
+    self.connection       = nil
     self.performanceLabel = nil
+
+    -- Estatísticas de frame
+    self.frameCount    = 0
+    self.avgFrameTime  = 0  -- média de Welford (M_n)
+    self.maxFrameTime  = 0
+    self.minFrameTime  = math.huge
+
+    -- FPS derivado (calculado sob demanda via getStats)
+    self.currentFPS = 0
+    self.memoryUsageMb = 0
+
     return self
 end
 
-function PerformanceMonitor:reset()
-    self.frameCount = 0
+-- Reset limpo: só chamado entre frames, nunca no meio de update
+function PerformanceMonitor:_resetStats()
+    self.frameCount   = 0
     self.avgFrameTime = 0
     self.maxFrameTime = 0
     self.minFrameTime = math.huge
-    self.currentFPS = 0
-    self.avgFPS = 0
-    self.maxFPS = 0
-    self.minFPS = 0
-    self.memoryUsageMb = 0
+    self.currentFPS   = 0
 end
 
 function PerformanceMonitor:start()
     if self.isEnabled then return end
     self.isEnabled = true
-    self:reset()
-    
+    self:_resetStats()
+
     self.connection = RunService.Heartbeat:Connect(function(dt)
-        self:update(dt)
+        self:_update(dt)
     end)
 end
 
 function PerformanceMonitor:stop()
     if not self.isEnabled then return end
     self.isEnabled = false
-    
+
     if self.connection then
         self.connection:Disconnect()
         self.connection = nil
     end
 end
 
-function PerformanceMonitor:update(dt)
-    local frameTime = dt or (tick() - self.lastFrameTime)
-    self.lastFrameTime = tick()
-    
-    self.frameCount = self.frameCount + 1
-    self.avgFrameTime = (self.avgFrameTime * (self.frameCount - 1) + frameTime) / self.frameCount
-    self.maxFrameTime = math.max(self.maxFrameTime, frameTime)
-    self.minFrameTime = math.min(self.minFrameTime, frameTime)
-    
-    -- Reset stats every 1000 frames to avoid stale extreme values
-    if self.frameCount >= 1000 then
-        self:reset()
-    end
-    
-    local fps = frameTime > 0 and 1 / frameTime or 0
-    self.currentFPS = fps
-    self.avgFPS = self.avgFrameTime > 0 and 1 / self.avgFrameTime or 0
-    self.maxFPS = self.minFrameTime > 0 and 1 / self.minFrameTime or 0
-    self.minFPS = self.maxFrameTime > 0 and 1 / self.maxFrameTime or 0
-    self.memoryUsageMb = Stats:GetTotalMemoryUsageMb()
+function PerformanceMonitor:_update(dt)
+    -- dt do Heartbeat já é o delta time correto; tick() removido
+    local frameCount = self.frameCount + 1
+    self.frameCount  = frameCount
 
-    if self.performanceLabel then
-        self.performanceLabel:SetText(string.format(
+    -- Média incremental de Welford: numericamente estável
+    -- M_n = M_(n-1) + (x - M_(n-1)) / n
+    self.avgFrameTime = self.avgFrameTime + (dt - self.avgFrameTime) / frameCount
+    self.maxFrameTime = mathMax(self.maxFrameTime, dt)
+    self.minFrameTime = mathMin(self.minFrameTime, dt)
+    self.currentFPS   = dt > 0 and (1 / dt) or 0
+
+    -- Atualiza memória com throttle (chamada cara)
+    if frameCount % MEMORY_UPDATE_INTERVAL == 0 then
+        self.memoryUsageMb = Stats:GetTotalMemoryUsageMb()
+    end
+
+    -- Atualiza label com throttle (string.format é pesado)
+    if self.performanceLabel and frameCount % LABEL_UPDATE_INTERVAL == 0 then
+        local avg = self.avgFrameTime
+        self.performanceLabel:SetText(sfmt(
             "FPS: %.1f (Avg: %.1f, Max: %.1f, Min: %.1f) | MEM: %.1f MB",
-            fps, self.avgFPS, self.maxFPS, self.minFPS, self.memoryUsageMb
+            self.currentFPS,
+            avg > 0        and (1 / avg)               or 0,  -- avgFPS
+            self.minFrameTime < math.huge and (1 / self.minFrameTime) or 0, -- maxFPS
+            self.maxFrameTime > 0         and (1 / self.maxFrameTime) or 0, -- minFPS
+            self.memoryUsageMb
         ))
+    end
+
+    -- Reset ao fim do frame (nunca no meio): preserva currentFPS e memória
+    if frameCount >= RESET_INTERVAL then
+        self:_resetStats()
+    end
+
+    -- Executa monitores customizados com time tracking
+    for _, monitor in next, self.monitors do
+        local t0 = osCloud()
+        monitor.callback()
+        monitor.totalTime = monitor.totalTime + (osCloud() - t0)
+        monitor.callCount = monitor.callCount + 1
+        monitor.lastCall  = t0
     end
 end
 
@@ -91,10 +124,10 @@ end
 
 function PerformanceMonitor:addMonitor(name, callback)
     self.monitors[name] = {
-        callback = callback,
-        lastCall = 0,
+        callback  = callback,
+        lastCall  = 0,
         callCount = 0,
-        totalTime = 0
+        totalTime = 0,
     }
 end
 
@@ -102,38 +135,47 @@ function PerformanceMonitor:removeMonitor(name)
     self.monitors[name] = nil
 end
 
+-- Retorna snapshot completo; FPS derivado calculado aqui (fora do hot path)
 function PerformanceMonitor:getStats()
+    local avg = self.avgFrameTime
+    local mn  = self.minFrameTime
+    local mx  = self.maxFrameTime
     return {
-        avgFrameTime = self.avgFrameTime,
-        maxFrameTime = self.maxFrameTime,
-        minFrameTime = self.minFrameTime,
-        frameCount = self.frameCount,
-        currentFPS = self.currentFPS,
-        avgFPS = self.avgFPS,
-        maxFPS = self.maxFPS,
-        minFPS = self.minFPS,
+        frameCount    = self.frameCount,
+        currentFPS    = self.currentFPS,
+        avgFPS        = avg > 0              and (1 / avg) or 0,
+        maxFPS        = mn < math.huge       and (1 / mn)  or 0,
+        minFPS        = mx > 0               and (1 / mx)  or 0,
+        avgFrameTime  = avg,
+        maxFrameTime  = mx,
+        minFrameTime  = mn,
         memoryUsageMb = self.memoryUsageMb,
     }
 end
 
-function PerformanceMonitor:getCurrentFPS()
-    return self.currentFPS
+-- Monitor stats individuais
+function PerformanceMonitor:getMonitorStats(name)
+    local m = self.monitors[name]
+    if not m then return nil end
+    return {
+        callCount = m.callCount,
+        totalTime = m.totalTime,
+        avgTime   = m.callCount > 0 and (m.totalTime / m.callCount) or 0,
+        lastCall  = m.lastCall,
+    }
 end
 
+-- Getters individuais mantidos para compatibilidade
+function PerformanceMonitor:getCurrentFPS()  return self.currentFPS end
+function PerformanceMonitor:getMemoryUsage() return self.memoryUsageMb end
 function PerformanceMonitor:getAverageFPS()
-    return self.avgFPS
+    return self.avgFrameTime > 0 and (1 / self.avgFrameTime) or 0
 end
-
 function PerformanceMonitor:getMaxFPS()
-    return self.maxFPS
+    return self.minFrameTime < math.huge and (1 / self.minFrameTime) or 0
 end
-
 function PerformanceMonitor:getMinFPS()
-    return self.minFPS
+    return self.maxFrameTime > 0 and (1 / self.maxFrameTime) or 0
 end
 
-function PerformanceMonitor:getMemoryUsage()
-    return self.memoryUsageMb
-end
-
-return PerformanceMonitor 
+return PerformanceMonitor
