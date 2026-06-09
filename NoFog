@@ -63,11 +63,14 @@ local DESTROY_COOLDOWN = 0.2 -- segundos
 
 function NoFog:apply()
     local Lighting = game:GetService("Lighting")
-    
-    -- Remove fog
-    Lighting.FogEnd = 1e10
-    Lighting.FogStart = 1e10 - 1
+    Lighting.FogEnd   = 100000  -- era 1e10
+    Lighting.FogStart = 99999   -- era 1e10 - 1
     Lighting.FogColor = Color3.new(1, 1, 1)
+    for _, child in ipairs(Lighting:GetChildren()) do
+        if isTargetEffect(child) then
+            pcall(function() child.Enabled = false end)
+        end
+    end
 end
 
 function NoFog:saveOriginal()
