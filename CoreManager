@@ -1226,16 +1226,19 @@ local function createMiscTab(miscTab)
         if not manager then
             return string.format('%s não está carregado ou não possui ConnectionManager.', name)
         end
-        local count = manager.count and manager:count() or 0
-        local active = 0
-        if manager._conns then
-            for conn in pairs(manager._conns) do
-                if conn.Connected then
-                    active = active + 1
-                end
+        if manager.getDetails then
+            local details = manager:getDetails()
+            if #details == 0 then
+                return string.format('%s: nenhuma conexão registrada', name)
             end
+            local lines = {string.format('%s (%d):', name, #details)}
+            for i, detail in ipairs(details) do
+                table.insert(lines, string.format('%d. %s [%s]', i, detail.name, detail.connected and 'ativa' or 'desconectada'))
+            end
+            return table.concat(lines, '\n')
         end
-        return string.format('%s: %d conexão(ões), %d ativas', name, count, active)
+        local count = manager.count and manager:count() or 0
+        return string.format('%s: %d conexão(ões)', name, count)
     end
 
     local function attachConnectionInfo(label, name, manager)
