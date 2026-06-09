@@ -51,6 +51,18 @@ local ipairs = ipairs
 -- Cache de funções Roblox para evitar indexação repetida
 local newInstance = Instance.new
 
+local function safeUtilsCall(func, ...)
+    if not utils or type(func) ~= "function" then
+        return nil
+    end
+    local success, result = pcall(func, ...)
+    if success then
+        return result
+    end
+    warn("[PlayerESP] utils call failed:", tostring(result))
+    return nil
+end
+
 -- Constantes para otimização
 local UPDATE_INTERVAL = 0.5 -- Intervalo de atualização dos billboards
 
@@ -118,7 +130,7 @@ local FRAME_CONFIG = {
                 dataKey = "rogueName",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return utils and utils:getPlayerRogueDisplay(player) or ""
+                    return safeUtilsCall(utils.getPlayerRogueDisplay, player) or ""
                 end
             },
             {
@@ -128,7 +140,7 @@ local FRAME_CONFIG = {
                 dataKey = "edict",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return utils and utils:getPlayerEdictDisplay(player) or ""
+                    return safeUtilsCall(utils.getPlayerEdictDisplay, player) or ""
                 end
             }
         }
@@ -148,7 +160,7 @@ local FRAME_CONFIG = {
                 dataKey = "healthDisplay",
                 showByDefault = true,
                 getData = function(player, cache)
-                    local healthDisplay = utils and utils:getPlayerHealthDisplay(player)
+                    local healthDisplay = safeUtilsCall(utils.getPlayerHealthDisplay, player)
                     if not healthDisplay and player.Character then
                         local hum = player.Character:FindFirstChildOfClass("Humanoid")
                         if hum then
@@ -167,7 +179,12 @@ local FRAME_CONFIG = {
                 getData = function(player, cache)
                     local _, healthPercentDisplay = nil, nil
                     if utils then
-                        _, healthPercentDisplay = utils:getPlayerHealthDisplay(player)
+                        local result = safeUtilsCall(utils.getPlayerHealthDisplay, player)
+                        if type(result) == "table" then
+                            _, healthPercentDisplay = table.unpack(result)
+                        else
+                            healthPercentDisplay = result
+                        end
                     end
                     if not healthPercentDisplay and player.Character then
                         local hum = player.Character:FindFirstChildOfClass("Humanoid")
@@ -214,8 +231,12 @@ end
 
 -- Cache otimizado para character local
 function PlayerESP:getLocalCharacter()
+    if not LocalPlayer then
+        LocalPlayer = Players.LocalPlayer
+    end
     local currentTime = tick()
     if currentTime - self._localCharCacheTime > 1 then
+        LocalPlayer = LocalPlayer or Players.LocalPlayer
         self._localCharCache = LocalPlayer and LocalPlayer.Character
         self._localCharCacheTime = currentTime
     end
