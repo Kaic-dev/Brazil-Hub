@@ -1,6 +1,7 @@
 -- FF Detector Script — Main (Bug-fixed)
 -- Fixes: Heartbeat órfão, InputBegan sem connMgr, BrazilHubLoaded sem reset,
---        tick() → os.clock(), queue_on_teleport seguro
+--        tick() → os.clock(), queue_on_teleport seguro,
+--        SaveManager: Dropdown load, Keybind robusto, autoload sync com slot
 
 if getgenv().BrazilHubLoaded then return end
 getgenv().BrazilHubLoaded = true
@@ -16,9 +17,9 @@ shared.Toggles = getgenv().Toggles
 
 -- ─── Serviços ─────────────────────────────────────────────────────────────────
 
-local Players         = game:GetService("Players")
-local RunService      = game:GetService("RunService")
-local TweenService    = game:GetService("TweenService")
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
 -- ─── Espera carregamento ──────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ waitForLoaded()
 local LoadingScreen = {}
 
 function LoadingScreen.create()
-    local CoreGui   = game:GetService("CoreGui")
+    local CoreGui     = game:GetService("CoreGui")
     local LocalPlayer = Players.LocalPlayer
 
     local parent
@@ -195,7 +196,6 @@ function LoadingScreen.create()
             { BackgroundTransparency = 1 }
         ):Play()
 
-        -- Fade em batch: separa por tipo para evitar GetDescendants() repetido
         for _, desc in ipairs(self.gui:GetDescendants()) do
             if desc:IsA("TextLabel") then
                 TweenService:Create(desc,
@@ -352,29 +352,47 @@ function SaveManager:SetFolder(folder)
     self.AutoloadFile = folder .. "/autoload.txt"
 end
 
+-- FIX: Save — Keybind usa EnumType.Name para ser agnóstico ao tipo de Enum;
+--             Dropdown detecta corretamente single (string) e multi (table)
 function SaveManager:Save(name)
     if not name or name == "" then return false end
     local HttpService = game:GetService("HttpService")
     local data = { Toggles = {}, Options = {} }
+
     for id, toggle in pairs(getgenv().Toggles) do
         if not self.IgnoreIndexes[id] then
             data.Toggles[id] = toggle.Value
         end
     end
+
     for id, option in pairs(getgenv().Options) do
         if not self.IgnoreIndexes[id] then
             local val = option.Value
+
             if typeof(val) == "EnumItem" then
-                data.Options[id] = { Type = "Keybind", Value = val.Name }
+                -- Salva o EnumType junto para restaurar corretamente
+                data.Options[id] = {
+                    Type      = "Keybind",
+                    EnumType  = tostring(val.EnumType),
+                    Value     = val.Name,
+                }
             elseif typeof(val) == "Color3" then
-                data.Options[id] = { Type = "Color",   Value = { val.R, val.G, val.B } }
-            elseif type(val) == "table" and option.Values then
-                data.Options[id] = { Type = "Dropdown", Value = val }
+                data.Options[id] = {
+                    Type  = "Color",
+                    Value = { val.R, val.G, val.B },
+                }
+            elseif type(val) == "table" then
+                -- Multi-dropdown: valor é tabela de strings selecionadas
+                data.Options[id] = { Type = "Dropdown", Multi = true,  Value = val }
+            elseif type(val) == "string" and option.Values then
+                -- Single-dropdown: valor é string
+                data.Options[id] = { Type = "Dropdown", Multi = false, Value = val }
             else
-                data.Options[id] = { Type = "Value",   Value = val }
+                data.Options[id] = { Type = "Value", Value = val }
             end
         end
     end
+
     local ok, err = safeWriteFile(
         self.Folder .. "/configs/" .. name .. ".json",
         HttpService:JSONEncode(data)
@@ -383,6 +401,7 @@ function SaveManager:Save(name)
     return ok
 end
 
+-- FIX: Load — tratamento completo para Dropdown (single e multi) e Keybind robusto
 function SaveManager:Load(name)
     if not name or name == "" then return false end
     local filePath = self.Folder .. "/configs/" .. name .. ".json"
@@ -392,6 +411,7 @@ function SaveManager:Load(name)
     local HttpService = game:GetService("HttpService")
     local ok, data = pcall(HttpService.JSONDecode, HttpService, content)
     if not ok or type(data) ~= "table" then return false end
+
     if data.Toggles then
         for id, state in pairs(data.Toggles) do
             local t = getgenv().Toggles[id]
@@ -400,28 +420,57 @@ function SaveManager:Load(name)
             end
         end
     end
+
     if data.Options then
         for id, optData in pairs(data.Options) do
             local opt = getgenv().Options[id]
             if opt and not self.IgnoreIndexes[id] then
                 pcall(function()
                     if type(optData) == "table" and optData.Type then
+
                         if optData.Type == "Keybind" then
-                            local key = Enum.KeyCode[optData.Value]
-                            if key then opt:SetValue(key) end
+                            -- Tenta restaurar pelo EnumType salvo; fallback para KeyCode
+                            local enumType = optData.EnumType
+                            local enumItem = nil
+                            if enumType then
+                                -- Ex: "Enum.KeyCode" → tenta Enum.KeyCode[value]
+                                local shortType = enumType:match("Enum%.(.+)") or enumType
+                                local ok2, result = pcall(function()
+                                    return Enum[shortType][optData.Value]
+                                end)
+                                if ok2 then enumItem = result end
+                            end
+                            -- Fallback seguro para KeyCode
+                            if not enumItem then
+                                local ok3, result = pcall(function()
+                                    return Enum.KeyCode[optData.Value]
+                                end)
+                                if ok3 then enumItem = result end
+                            end
+                            if enumItem then opt:SetValue(enumItem) end
+
                         elseif optData.Type == "Color" then
                             local r = optData.Value
                             opt:SetValue(Color3.new(r[1], r[2], r[3]))
+
+                        elseif optData.Type == "Dropdown" then
+                            -- Tanto single (string) quanto multi (table) passam o .Value direto
+                            opt:SetValue(optData.Value)
+
                         else
+                            -- "Value" e qualquer tipo desconhecido
                             opt:SetValue(optData.Value)
                         end
+
                     else
+                        -- Formato legado (valor direto sem wrapper)
                         opt:SetValue(optData)
                     end
                 end)
             end
         end
     end
+
     return true
 end
 
@@ -432,16 +481,27 @@ function SaveManager:LoadAutoloadConfig()
     end
 end
 
+-- FIX: BuildConfigSection — autoload é atualizado sempre que slot OU toggle mudam,
+--      garantindo que o arquivo reflita o slot correto no momento do save.
 function SaveManager:BuildConfigSection(tab)
     local configGroup  = tab:AddRightGroupbox("Configurations")
     local slots        = { "Slot 1", "Slot 2", "Slot 3", "Slot 4", "Slot 5" }
     local selectedSlot = "Slot 1"
+    local autoloadOn   = false
+
+    local function persistAutoload()
+        safeWriteFile(self.AutoloadFile, autoloadOn and selectedSlot or "")
+    end
 
     configGroup:AddDropdown("SelectedConfigSlot", {
         Values   = slots,
         Default  = "Slot 1",
         Text     = "Select Config Slot",
-        Callback = function(val) selectedSlot = val end,
+        Callback = function(val)
+            selectedSlot = val
+            -- FIX: re-persiste se autoload estiver ativo com o novo slot
+            if autoloadOn then persistAutoload() end
+        end,
     })
     configGroup:AddButton("Save Config",  function() self:Save(selectedSlot) end)
     configGroup:AddButton("Load Config",  function() self:Load(selectedSlot) end)
@@ -449,7 +509,8 @@ function SaveManager:BuildConfigSection(tab)
         Text     = "Autoload Selected Slot",
         Default  = false,
         Callback = function(state)
-            safeWriteFile(self.AutoloadFile, state and selectedSlot or "")
+            autoloadOn = state
+            persistAutoload()
         end,
     })
 
@@ -457,6 +518,7 @@ function SaveManager:BuildConfigSection(tab)
         if safeIsFile(self.AutoloadFile) then
             local cur = safeReadFile(self.AutoloadFile)
             if cur and cur ~= "" then
+                autoloadOn = true
                 local t = getgenv().Toggles["AutoloadConfig"]
                 if t then t:SetValue(true) end
             end
@@ -471,19 +533,19 @@ local function safeLoad(path, name)
     return safeRequireRemote(BRAZIL_HUB_BASE_URL .. path, name)
 end
 
-local FFDetector       = safeLoad("Modules/ForceField/Core/ForceFieldManager", "ForceFieldManager")
-local PlayerESP        = safeLoad("PlayerESPHandler",    "PlayerESP")
-local AutoAim          = safeLoad("Auto-Aim",            "Auto-Aim")
-local BetterLeaderboard = safeLoad("betterleaderboard",  "BetterLeaderboard")
-local TrinketESP       = safeLoad("trinket_esp_handler", "TrinketESP")
-local NoFog            = safeLoad("NoFog",               "NoFog")
-local Intent           = safeLoad("Intent",              "Intent")
-local AutoBlock        = safeLoad("auto_block",          "AutoBlock")
-local TriggerMonitor   = safeLoad("TriggerMonitor",      "TriggerMonitor")
-local PerformanceMonitor = safeLoad("PerformanceMonitor","PerformanceMonitor")
-local FOVCircleManager = safeLoad("FOVCircleManager",    "FOVCircleManager")
-local ConnectionManager = safeLoad("ConnectionManager",  "ConnectionManager")
-local UtilsService     = safeLoad("UtilsService",        "UtilsService")
+local FFDetector        = safeLoad("Modules/ForceField/Core/ForceFieldManager", "ForceFieldManager")
+local PlayerESP         = safeLoad("PlayerESPHandler",    "PlayerESP")
+local AutoAim           = safeLoad("Auto-Aim",            "Auto-Aim")
+local BetterLeaderboard = safeLoad("betterleaderboard",   "BetterLeaderboard")
+local TrinketESP        = safeLoad("trinket_esp_handler", "TrinketESP")
+local NoFog             = safeLoad("NoFog",               "NoFog")
+local Intent            = safeLoad("Intent",              "Intent")
+local AutoBlock         = safeLoad("auto_block",          "AutoBlock")
+local TriggerMonitor    = safeLoad("TriggerMonitor",      "TriggerMonitor")
+local PerformanceMonitor = safeLoad("PerformanceMonitor", "PerformanceMonitor")
+local FOVCircleManager  = safeLoad("FOVCircleManager",    "FOVCircleManager")
+local ConnectionManager = safeLoad("ConnectionManager",   "ConnectionManager")
+local UtilsService      = safeLoad("UtilsService",        "UtilsService")
 
 -- ─── ConnectionManager global ─────────────────────────────────────────────────
 
@@ -540,16 +602,16 @@ end
 
 local CONFIG = {
     AUTO_AIM = {
-        AVAILABLE_TOOLS  = { "Fimbulvetr","Perflora","Armis","Grapple","Percutiens","Inferi" },
-        DEFAULT_FOV      = 20,
-        DEFAULT_RANGE    = 200,
+        AVAILABLE_TOOLS     = { "Fimbulvetr","Perflora","Armis","Grapple","Percutiens","Inferi" },
+        DEFAULT_FOV         = 20,
+        DEFAULT_RANGE       = 200,
         DEFAULT_TIME_TO_HIT = 0.15,
         DEFAULT_STUDS_BEHIND = { min = 20, max = 30 },
     },
     FOV_CIRCLE = {
-        DEFAULT_COLOR     = Color3.fromRGB(0, 255, 128),
-        STROKE_THICKNESS  = 2,
-        TRANSPARENCY      = 0.3,
+        DEFAULT_COLOR    = Color3.fromRGB(0, 255, 128),
+        STROKE_THICKNESS = 2,
+        TRANSPARENCY     = 0.3,
     },
     PLAYER_ESP = {
         DEFAULT_TEXT_SIZE  = 14,
@@ -582,8 +644,8 @@ function UICallbacks.onPlayerESPTextColorChanged(v) ModuleInstances.playerEsp:se
 function UICallbacks.onToggleAutoAim(e)
     if e then ModuleInstances.autoAim:enable() else ModuleInstances.autoAim:disable() end
 end
-function UICallbacks.onAutoAimFOVChanged(v)         ModuleInstances.autoAim:setFOV(v) end
-function UICallbacks.onAutoAimToolsChanged(tools)   ModuleInstances.autoAim:setTools(tools) end
+function UICallbacks.onAutoAimFOVChanged(v)       ModuleInstances.autoAim:setFOV(v) end
+function UICallbacks.onAutoAimToolsChanged(tools) ModuleInstances.autoAim:setTools(tools) end
 function UICallbacks.onStudsBehindMinChanged(v)
     CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min = v
     ModuleInstances.autoAim:setStudsBehindRange(
@@ -821,10 +883,10 @@ local function createVisualsTab(visualsTab)
     })
 
     local otherGroup = visualsTab:AddRightGroupbox("Other")
-    otherGroup:AddToggle("TrinketESP",       { Text = "Trinket ESP",       Default = false, Callback = UICallbacks.onToggleTrinketESP })
-    otherGroup:AddToggle("IntentBillboard",  { Text = "Intent Billboard",  Default = false, Callback = UICallbacks.onToggleIntentBillboard })
-    otherGroup:AddToggle("BetterLeaderboard",{ Text = "Better Leaderboard",Default = false, Callback = UICallbacks.onToggleBetterLeaderboard })
-    otherGroup:AddToggle("NoFogToggle",      { Text = "No Fog",            Default = false, Callback = UICallbacks.onToggleNoFog })
+    otherGroup:AddToggle("TrinketESP",        { Text = "Trinket ESP",        Default = false, Callback = UICallbacks.onToggleTrinketESP })
+    otherGroup:AddToggle("IntentBillboard",   { Text = "Intent Billboard",   Default = false, Callback = UICallbacks.onToggleIntentBillboard })
+    otherGroup:AddToggle("BetterLeaderboard", { Text = "Better Leaderboard", Default = false, Callback = UICallbacks.onToggleBetterLeaderboard })
+    otherGroup:AddToggle("NoFogToggle",       { Text = "No Fog",             Default = false, Callback = UICallbacks.onToggleNoFog })
 end
 
 -- ─── Misc Tab ─────────────────────────────────────────────────────────────────
@@ -833,7 +895,6 @@ local function createMiscTab(miscTab)
     local triggersGroup = miscTab:AddLeftGroupbox("Triggers")
 
     if triggerMonitor then
-        -- Alias de compatibilidade (método renomeado na refatoração)
         if not triggerMonitor.getTriggersLabelText then
             triggerMonitor.getTriggersLabelText = triggerMonitor._buildLabelText
         end
@@ -858,26 +919,26 @@ local function createMiscTab(miscTab)
     local connGroup = miscTab:AddRightGroupbox("Connections")
 
     local labels = {
-        ff        = connGroup:AddLabel("FFDetector: ..."),
-        esp       = connGroup:AddLabel("PlayerESP: ..."),
-        trinket   = connGroup:AddLabel("TrinketESP: ..."),
-        lb        = connGroup:AddLabel("BetterLB: ..."),
-        nofog     = connGroup:AddLabel("NoFog: ..."),
-        intent    = connGroup:AddLabel("Intent: ..."),
-        script    = connGroup:AddLabel("Script: ..."),
-        perf      = connGroup:AddLabel("Performance: disabled"),
+        ff      = connGroup:AddLabel("FFDetector: ..."),
+        esp     = connGroup:AddLabel("PlayerESP: ..."),
+        trinket = connGroup:AddLabel("TrinketESP: ..."),
+        lb      = connGroup:AddLabel("BetterLB: ..."),
+        nofog   = connGroup:AddLabel("NoFog: ..."),
+        intent  = connGroup:AddLabel("Intent: ..."),
+        script  = connGroup:AddLabel("Script: ..."),
+        perf    = connGroup:AddLabel("Performance: disabled"),
     }
     local detailsLabel = connGroup:AddLabel("Clique numa conexão p/ detalhes", true)
 
     -- ── Performance Monitor ───────────────────────────────────────────────────
 
     if PerformanceMonitor then
-        local perfMonitor          = PerformanceMonitor.new()
-        local memoryKickEnabled    = false
-        local memoryThreshold      = 3000
-        local memoryTriggered      = false
+        local perfMonitor           = PerformanceMonitor.new()
+        local memoryKickEnabled     = false
+        local memoryThreshold       = 3000
+        local memoryTriggered       = false
         local memoryAccumulatedTime = 0
-        local memoryHoldTime       = 2.0
+        local memoryHoldTime        = 2.0
 
         perfMonitor:setLabel(labels.perf)
 
@@ -890,7 +951,7 @@ local function createMiscTab(miscTab)
                 else
                     perfMonitor:stop()
                     labels.perf:SetText("Performance: disabled")
-                    memoryTriggered      = false
+                    memoryTriggered       = false
                     memoryAccumulatedTime = 0
                 end
             end,
@@ -899,8 +960,8 @@ local function createMiscTab(miscTab)
             Text    = "Kick on high memory",
             Default = false,
             Callback = function(enabled)
-                memoryKickEnabled    = enabled
-                memoryTriggered      = false
+                memoryKickEnabled     = enabled
+                memoryTriggered       = false
                 memoryAccumulatedTime = 0
             end,
         })
@@ -910,7 +971,6 @@ local function createMiscTab(miscTab)
             Callback = function(v) memoryThreshold = v end,
         })
 
-        -- FIX: Heartbeat do memory kick registrado no connMgr para cleanup correto
         connMgr:add(RunService.Heartbeat:Connect(function(dt)
             if not memoryKickEnabled or not perfMonitor.isEnabled then return end
             local mem = perfMonitor:getMemoryUsage()
@@ -935,9 +995,8 @@ local function createMiscTab(miscTab)
 
     -- ── Connection label updater ──────────────────────────────────────────────
 
-    -- FIX: usa os.clock() em vez de tick(); Heartbeat registrado no connMgr
-    local lastConnUpdate   = 0
-    local CONN_UPDATE_INTERVAL = 2.0
+    local lastConnUpdate        = 0
+    local CONN_UPDATE_INTERVAL  = 2.0
 
     connMgr:add(RunService.Heartbeat:Connect(function()
         local now = os.clock()
@@ -990,7 +1049,6 @@ local function createMiscTab(miscTab)
     attachClick(labels.intent,  "Intent",     Intent  and Intent.connectionMgr)
     attachClick(labels.script,  "Script",     connMgr)
 
-    -- FIX: InputBegan registrado no connMgr — não mais órfão
     local isUIVisible = true
     connMgr:add(UserInputService.InputBegan:Connect(function(input)
         if input.KeyCode == Enum.KeyCode.Insert then
@@ -1036,10 +1094,10 @@ end
 local function main()
     loadingScreen:setStatus("Building UI...")
     local window = Library:CreateWindow({
-        Title       = "[Brazil Hub]",
-        Center      = true,
-        AutoShow    = true,
-        TabPadding  = 8,
+        Title        = "[Brazil Hub]",
+        Center       = true,
+        AutoShow     = true,
+        TabPadding   = 8,
         MenuFadeTime = 0.2,
     })
     local tabs = {
@@ -1056,7 +1114,7 @@ local function main()
         end)
     end
 
-    createCombatTab(tabs.Combat,     fovManager)
+    createCombatTab(tabs.Combat,  fovManager)
     createVisualsTab(tabs.Visuals)
     createMiscTab(tabs.Misc)
     createUISettingsTab(tabs.UISettings)
@@ -1068,7 +1126,6 @@ end
 main()
 
 -- ─── Queue on teleport ────────────────────────────────────────────────────────
--- FIX: verifica cada executor de forma segura sem indexar nil
 
 local loaderUrl = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/refs/heads/main/Loader"))()'
 
