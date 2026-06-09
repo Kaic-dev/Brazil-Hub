@@ -51,16 +51,15 @@ local ipairs = ipairs
 -- Cache de funções Roblox para evitar indexação repetida
 local newInstance = Instance.new
 
-local function safeUtilsCall(func, ...)
-    if not utils or type(func) ~= "function" then
+-- Novo helper: passa utils como self automaticamente
+local function callUtils(methodName, ...)
+    if not utils or type(utils[methodName]) ~= "function" then return nil end
+    local ok, result = pcall(utils[methodName], utils, ...)
+    if not ok then
+        warn("[PlayerESP] utils." .. methodName .. " falhou:", tostring(result))
         return nil
     end
-    local success, result = pcall(func, ...)
-    if success then
-        return result
-    end
-    warn("[PlayerESP] utils call failed:", tostring(result))
-    return nil
+    return result
 end
 
 -- Constantes para otimização
@@ -130,7 +129,7 @@ local FRAME_CONFIG = {
                 dataKey = "rogueName",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return safeUtilsCall(utils.getPlayerRogueDisplay, player) or ""
+                    return callUtils("getPlayerRogueDisplay", player) or ""
                 end
             },
             {
@@ -140,7 +139,7 @@ local FRAME_CONFIG = {
                 dataKey = "edict",
                 showByDefault = true,
                 getData = function(player, cache)
-                    return safeUtilsCall(utils.getPlayerEdictDisplay, player) or ""
+                    return callUtils("getPlayerEdictDisplay", player) or ""
                 end
             }
         }
@@ -160,11 +159,11 @@ local FRAME_CONFIG = {
                 dataKey = "healthDisplay",
                 showByDefault = true,
                 getData = function(player, cache)
-                    local healthDisplay = safeUtilsCall(utils.getPlayerHealthDisplay, player)
+                    local healthDisplay = callUtils("getPlayerHealthDisplay", player)
                     if not healthDisplay and player.Character then
                         local hum = player.Character:FindFirstChildOfClass("Humanoid")
                         if hum then
-                            healthDisplay = tostring(math.floor(hum.Health)) .. "/" .. tostring(math.floor(hum.MaxHealth))
+                            return floor(hum.Health) .. "/" .. floor(hum.MaxHealth)
                         end
                     end
                     return healthDisplay or "0/100"
@@ -177,19 +176,12 @@ local FRAME_CONFIG = {
                 dataKey = "healthPercentDisplay",
                 showByDefault = true,
                 getData = function(player, cache)
-                    local _, healthPercentDisplay = nil, nil
-                    if utils then
-                        local result = safeUtilsCall(utils.getPlayerHealthDisplay, player)
-                        if type(result) == "table" then
-                            _, healthPercentDisplay = table.unpack(result)
-                        else
-                            healthPercentDisplay = result
-                        end
-                    end
+                    local result = callUtils("getPlayerHealthDisplay", player)
+                    local healthPercentDisplay = type(result) == "table" and select(2, table.unpack(result)) or result
                     if not healthPercentDisplay and player.Character then
                         local hum = player.Character:FindFirstChildOfClass("Humanoid")
                         if hum and hum.MaxHealth > 0 then
-                            healthPercentDisplay = tostring(math.floor((hum.Health / hum.MaxHealth) * 100)) .. "%"
+                            return floor((hum.Health / hum.MaxHealth) * 100) .. "%"
                         end
                     end
                     return healthPercentDisplay or "0%"
