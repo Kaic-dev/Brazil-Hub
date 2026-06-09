@@ -1,70 +1,68 @@
--- NoFog.lua
--- Módulo para remover e restaurar fog e efeitos visuais do Lighting
-
 local NoFog = {}
-NoFog.enabled = false
-NoFog._connections = {}
+NoFog.enabled  = false
+NoFog._connMgr = nil
 NoFog._original = nil
 
 local function safeRequireRemote(url, name)
-    local success, result = pcall(function()
-        return game:HttpGet(url)
-    end)
-    if not success then
-        warn("[NoFog] Failed to download module:", name or url, tostring(result))
-        return nil
-    end
-
-    local moduleFunc, err = loadstring(result)
-    if not moduleFunc then
-        warn("[NoFog] Failed to compile module:", name or url, tostring(err))
-        return nil
-    end
-
-    local ok, module = pcall(moduleFunc)
-    if not ok then
-        warn("[NoFog] Failed to execute module:", name or url, tostring(module))
-        return nil
-    end
-
-    return module
+    local ok, raw = pcall(game.HttpGet, game, url)
+    if not ok then warn("[NoFog] Download falhou:", name, raw) return nil end
+    local fn, err = loadstring(raw)
+    if not fn then warn("[NoFog] Compilação falhou:", name, err) return nil end
+    local ok2, mod = pcall(fn)
+    if not ok2 then warn("[NoFog] Execução falhou:", name, mod) return nil end
+    return mod
 end
 
-local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+local ConnectionManager = safeRequireRemote(
+    "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
+    "ConnectionManager"
+) or {
     new = function()
         return {
-            add = function() end,
-            disconnectAll = function() end
+            add           = function(self, c) end,
+            disconnectAll = function(self) end,
         }
-    end
+    end,
 }
-NoFog._connMgr = ConnectionManager.new()
 
--- Lista de efeitos suportados
 local EFFECT_TYPES = {
-    "Atmosphere",
-    "BloomEffect", 
-    "ColorCorrectionEffect",
-    "DepthOfFieldEffect",
-    "SunRaysEffect"
+    "Atmosphere", "BloomEffect", "ColorCorrectionEffect",
+    "DepthOfFieldEffect", "SunRaysEffect",
 }
 
 local function isTargetEffect(obj)
-    for _, effectType in ipairs(EFFECT_TYPES) do
-        if obj:IsA(effectType) then
-            return true
-        end
+    for _, t in ipairs(EFFECT_TYPES) do
+        if obj:IsA(t) then return true end
     end
     return false
 end
 
-local lastDestroy = 0
-local DESTROY_COOLDOWN = 0.2 -- segundos
+-- Salva estado original no momento do carregamento do módulo
+local function captureOriginal()
+    local Lighting = game:GetService("Lighting")
+    local orig = {
+        FogStart = Lighting.FogStart,
+        FogEnd   = Lighting.FogEnd,
+        FogColor = Lighting.FogColor,
+        effects  = {},
+    }
+    for _, child in ipairs(Lighting:GetChildren()) do
+        if isTargetEffect(child) then
+            orig.effects[#orig.effects + 1] = {
+                instance   = child,
+                wasEnabled = child.Enabled,
+            }
+        end
+    end
+    return orig
+end
+
+NoFog._original = captureOriginal()
 
 function NoFog:apply()
     local Lighting = game:GetService("Lighting")
-    Lighting.FogEnd   = 100000  -- era 1e10
-    Lighting.FogStart = 99999   -- era 1e10 - 1
+    Lighting.FogEnd   = 100000
+    Lighting.FogStart = 99999
     Lighting.FogColor = Color3.new(1, 1, 1)
     for _, child in ipairs(Lighting:GetChildren()) do
         if isTargetEffect(child) then
@@ -73,44 +71,50 @@ function NoFog:apply()
     end
 end
 
-function NoFog:saveOriginal()
-    local Lighting = game:GetService("Lighting")
-    self._original = {
-        FogStart = Lighting.FogStart,
-        FogEnd = Lighting.FogEnd,
-        FogColor = Lighting.FogColor
-    }
-end
-
 function NoFog:restoreOriginal()
     local Lighting = game:GetService("Lighting")
     if not self._original then return end
-    
-    -- Restaura propriedades do fog
     Lighting.FogStart = self._original.FogStart
-    Lighting.FogEnd = self._original.FogEnd
+    Lighting.FogEnd   = self._original.FogEnd
     Lighting.FogColor = self._original.FogColor
+    for _, data in ipairs(self._original.effects or {}) do
+        if data.instance and data.instance.Parent then
+            pcall(function() data.instance.Enabled = data.wasEnabled end)
+        end
+    end
 end
 
 function NoFog:enable()
     if self.enabled then return end
-    self.enabled = true
-    self:saveOriginal()
+    self._connMgr = ConnectionManager.new()
+    self.enabled  = true
     self:apply()
+
+    local Lighting = game:GetService("Lighting")
+    self._connMgr:add(
+        Lighting.ChildAdded:Connect(function(child)
+            if self.enabled and isTargetEffect(child) then
+                task.defer(function()
+                    if self.enabled then
+                        pcall(function() child.Enabled = false end)
+                    end
+                end)
+            end
+        end),
+        "Lighting.ChildAdded"
+    )
 end
 
 function NoFog:disable()
     if not self.enabled then return end
     self.enabled = false
-    self._connMgr:disconnectAll()
+    if self._connMgr then
+        self._connMgr:disconnectAll()
+        self._connMgr = nil
+    end
     self:restoreOriginal()
 end
 
-function NoFog:cleanup()
-    self:disable()
-end
-
--- Método para verificar se está habilitado
 function NoFog:isEnabled()
     return self.enabled
 end
