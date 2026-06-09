@@ -265,22 +265,33 @@ function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
     local camera = workspace.CurrentCamera
     if not camera then return end
 
+    if targetPlayer == Players.LocalPlayer then return end
+
     if self._currentCameraTarget == targetPlayer then
-        local local_ = Players.LocalPlayer
-        if local_ and local_.Character then
-            local hum = local_.Character:FindFirstChild("Humanoid")
-            if hum then camera.CameraSubject = hum end
-        end
         self._currentCameraTarget = nil
+        local local_ = Players.LocalPlayer
+        local returnTarget = nil
+        if local_ and local_.Character then
+            returnTarget = local_.Character:FindFirstChildOfClass("Humanoid")
+        end
+        if returnTarget then
+            camera.CameraSubject = returnTarget
+        else
+            camera.CameraType = Enum.CameraType.Custom
+        end
     else
-        if targetPlayer and targetPlayer.Character then
-            local hum = targetPlayer.Character:FindFirstChild("Humanoid")
-            if hum then
-                camera.CameraSubject  = hum
-                self._currentCameraTarget = targetPlayer
-            end
+        if not targetPlayer then return end
+        local subject = nil
+        if targetPlayer.Character then
+            subject = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+                   or targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        end
+        if subject then
+            camera.CameraSubject      = subject
+            self._currentCameraTarget = targetPlayer
         end
     end
+
     self:_updateAllLabelsColor()
 end
 
