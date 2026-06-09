@@ -10,9 +10,11 @@ function CharacterConnections.new(character)
 	local self = setmetatable({}, CharacterConnections)
 	self.character = character
 	self._connMgr = ConnectionManager.new()
+	self._ffConns = {}
 	self._onFFAdded = nil
 	self._onCharacterRemoved = nil
 	self._onFFRemoved = nil
+	self._disconnected = false
 	return self
 end
 
@@ -25,38 +27,53 @@ end
 
 -- Inicia escuta de eventos do personagem
 function CharacterConnections:watch()
-	local char = self.character
+    local char = self.character
 
-	-- FF detectado manualmente
-	self._connMgr:add(char.ChildAdded:Connect(function(child)
-		if child:IsA("ForceField") and self._onFFAdded then
-			self._onFFAdded(child)
-		end
-	end))
+    -- usa safeConnect para erros não quebrarem o frame
+    self._connMgr:safeConnect(char.ChildAdded, function(child)
+        if self._disconnected then return end
+        if child:IsA("ForceField") and self._onFFAdded then
+            self._onFFAdded(child)
+        end
+    end)
 
-	-- Personagem removido
-	self._connMgr:add(char.AncestryChanged:Connect(function(_, parent)
-		if not parent and self._onCharacterRemoved then
-			self._onCharacterRemoved()
-		end
-	end))
+    -- FIX: IsDescendantOf(game) em vez de checar parent direto
+    self._connMgr:safeConnect(char.AncestryChanged, function()
+        if not char:IsDescendantOf(game) then
+            if not self._disconnected and self._onCharacterRemoved then
+                self._disconnected = true
+                self._onCharacterRemoved()
+            end
+        end
+    end)
 end
 
--- Conecta FF individual
 function CharacterConnections:trackFF(ff)
-	if not ff or not ff:IsA("ForceField") then return end
+    if not ff or not ff:IsA("ForceField") then return end
+    if self._disconnected then return end
+    if self._ffConns[ff] then return end
 
-	local conn = ff.AncestryChanged:Connect(function(_, parent)
-		if not parent and self._onFFRemoved then
-			self._onFFRemoved(ff)
-		end
-	end)
+    local conn = self._connMgr:safeConnect(ff.AncestryChanged, function()
+        -- FIX: mesma lógica — IsDescendantOf em vez de checar parent
+        if not ff:IsDescendantOf(game) then
+            local storedConn = self._ffConns[ff]
+            if storedConn then
+                self._connMgr:remove(storedConn)
+                self._ffConns[ff] = nil
+            end
+            if not self._disconnected and self._onFFRemoved then
+                self._onFFRemoved(ff)
+            end
+        end
+    end)
 
-	self._connMgr:add(conn)
+    self._ffConns[ff] = conn
 end
 
 function CharacterConnections:disconnect()
+	self._disconnected = true
 	self._connMgr:disconnectAll()
+	self._ffConns = {}
 end
 
 return CharacterConnections
