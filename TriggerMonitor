@@ -319,4 +319,6 @@ function TriggerMonitor:destroy()
     folderCache  = {}
 end
 
+TriggerMonitor.getTriggersLabelText = TriggerMonitor._buildLabelText
+
 return TriggerMonitor
