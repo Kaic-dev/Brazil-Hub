@@ -1,8 +1,9 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v4)
+-- Fly.lua (v5)
 --
 -- Controles: WASD para direção. W/S seguem o pitch da câmera (câmera pra
 -- baixo = desce, pra cima = sobe). A/D são sempre horizontais.
+-- Space soma componente vertical pura (acelera subida).
 -- Velocidade configurável via :setSpeed(n).
 --
 -- Implementação:
@@ -13,6 +14,7 @@
 --   - Reconecta automaticamente se o personagem re-spawnar
 --   - AncestryChanged nas instâncias físicas para recriar sob demanda
 --     (sem polling no Heartbeat)
+--   - MaxForce Y liberado quando parado para evitar conflito com gravidade
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
@@ -56,6 +58,7 @@ local KEY_FORWARD  = Enum.KeyCode.W
 local KEY_BACKWARD = Enum.KeyCode.S
 local KEY_LEFT     = Enum.KeyCode.A
 local KEY_RIGHT    = Enum.KeyCode.D
+local KEY_UP       = Enum.KeyCode.Space
 
 --------------------------------------------------------------------------------
 -- Classe Fly
@@ -126,7 +129,7 @@ function Fly:_createPhysics()
     local bg = Instance.new("BodyGyro")
     bg.Name      = "_FlyBG"
     bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
-    bg.D         = 100
+    bg.D         = 50  -- reduzido de 100 para resistir menos ao movimento
     bg.CFrame    = self._rootPart.CFrame
     bg.Parent    = self._rootPart
     self._bodyGyro = bg
@@ -184,22 +187,29 @@ function Fly:_startLoop()
         local backward = uis:IsKeyDown(KEY_BACKWARD)
         local leftKey  = uis:IsKeyDown(KEY_LEFT)
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
+        local up       = uis:IsKeyDown(KEY_UP)
 
         local dir = Vector3.zero
 
-        -- W/S seguem o look completo da câmera (pitch incluído)
         if forward  then dir = dir + look   end
         if backward then dir = dir - look   end
-
-        -- A/D sempre horizontais
         if rightKey then dir = dir + rightH end
         if leftKey  then dir = dir - rightH end
+        if up       then dir = dir + Vector3.new(0, 1, 0) end
 
         local velocity
         if dir.Magnitude > 0.01 then
             velocity = dir.Unit * self._speed
+            -- força total nos 3 eixos durante o movimento
+            pcall_(function()
+                self._bodyVelocity.MaxForce = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
+            end)
         else
             velocity = Vector3.zero
+            -- libera Y quando parado: evita conflito com gravidade
+            pcall_(function()
+                self._bodyVelocity.MaxForce = Vector3.new(BV_MAX_FORCE, 0, BV_MAX_FORCE)
+            end)
         end
 
         pcall_(function() self._bodyVelocity.Velocity = velocity end)
