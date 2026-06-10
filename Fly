@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v12)
+-- Fly.lua (v13)
 --
 -- Arquitetura simplificada: um único Heartbeat gerencia tudo.
 -- Sem yields, defers, spawns ou AncestryChanged no caminho crítico.
@@ -56,8 +56,6 @@ local V3_ZERO           = Vector3.zero
 local V3_RIGHT_FALLBACK = Vector3.new(1, 0, 0)
 local V3_LOOK_FALLBACK  = Vector3.new(0, 0, -1)
 
-local PHYSICS_STATE = Enum.HumanoidStateType.Physics
-
 --------------------------------------------------------------------------------
 -- Classe Fly
 --------------------------------------------------------------------------------
@@ -83,7 +81,6 @@ function Fly.new(connectionManager)
 
         _heartbeat       = nil,
         _spawnConn       = nil,
-        _stateConn       = nil,   -- ouve StateChanged do humanoid atual
     }, Fly)
 end
 
@@ -104,51 +101,6 @@ local function getCharacterParts()
     local rootPart = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not rootPart then return nil, nil end
     return humanoid, rootPart
-end
-
---------------------------------------------------------------------------------
--- Controle do humanoid
---
--- ChangeState(Physics) é chamado UMA vez por humanoid (não todo frame).
--- StateChanged reconecta imediatamente se algo externo mudar o estado.
--- Isso evita o loop de transições 60x/s que travava a física.
---------------------------------------------------------------------------------
-
-function Fly:_disconnectStateWatcher()
-    if self._stateConn then
-        pcall(function() self._stateConn:Disconnect() end)
-        self._stateConn = nil
-    end
-end
-
-function Fly:_setupHumanoid(humanoid)
-    if not humanoid then return end
-
-    -- Propriedades baratas: OK setar todo frame se necessário, mas aqui
-    -- fazemos uma vez por humanoid
-    pcall(function() humanoid.AutoRotate    = false end)
-    pcall(function() humanoid.PlatformStand = true  end)
-
-    -- Estado Physics: setado UMA vez
-    pcall(function() humanoid:ChangeState(PHYSICS_STATE) end)
-
-    -- Watcher: se qualquer sistema externo mudar o estado,
-    -- corrige imediatamente via evento (não precisa checar todo frame)
-    self:_disconnectStateWatcher()
-    self._stateConn = humanoid.StateChanged:Connect(function(_, newState)
-        if not self.enabled then return end
-        if newState == PHYSICS_STATE then return end
-        -- algo mudou o estado — corrige na próxima oportunidade
-        pcall(function() humanoid:ChangeState(PHYSICS_STATE) end)
-    end)
-end
-
-function Fly:_teardownHumanoid(humanoid)
-    self:_disconnectStateWatcher()
-    if not humanoid then return end
-    pcall(function() humanoid.AutoRotate    = true  end)
-    pcall(function() humanoid.PlatformStand = false end)
-    pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
 end
 
 --------------------------------------------------------------------------------
@@ -194,7 +146,6 @@ end
 
 --------------------------------------------------------------------------------
 -- Heartbeat único — gerencia física + movimento
--- NÃO chama mais ChangeState todo frame
 --------------------------------------------------------------------------------
 
 function Fly:_startHeartbeat()
@@ -211,13 +162,9 @@ function Fly:_startHeartbeat()
         local humanoid, rootPart = getCharacterParts()
         if not humanoid or not rootPart then return end
 
-        -- Novo humanoid (respawn): configura estado uma única vez
+        -- Novo humanoid (respawn): limpa física anterior
         if humanoid ~= lastHumanoid then
-            if lastHumanoid then
-                self:_teardownHumanoid(lastHumanoid)
-                self:_removePhysics()
-            end
-            self:_setupHumanoid(humanoid)
+            if lastHumanoid then self:_removePhysics() end
             lastHumanoid = humanoid
         end
 
@@ -315,10 +262,6 @@ function Fly:enable()
     if self.enabled then return end
     self.enabled = true
 
-    -- Configura o humanoid atual imediatamente (não espera o primeiro Heartbeat)
-    local humanoid, _ = getCharacterParts()
-    if humanoid then self:_setupHumanoid(humanoid) end
-
     self:_startHeartbeat()
 
     local player = Players.LocalPlayer
@@ -343,9 +286,6 @@ function Fly:disable()
         pcall(function() self._spawnConn:Disconnect() end)
         self._spawnConn = nil
     end
-
-    local humanoid, _ = getCharacterParts()
-    self:_teardownHumanoid(humanoid)
 end
 
 function Fly:destroy()
