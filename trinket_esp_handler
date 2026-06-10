@@ -49,12 +49,6 @@ local Config = {
         -- Linha de ancoragem
         AnchorLineWidth = 1,
 
-        -- Fade por distância
-        FullOpacityDistance = 30,   -- até 30m: totalmente visível
-        FadeDistance = 80,          -- de 30m a 80m: fade progressivo
-        MinTransparency = 0,        -- mais próximo = opaco
-        MaxTransparency = 0.85,     -- mais longe = quase sumido
-
         MaxProcessPerFrame = 5,
     },
 
@@ -142,7 +136,7 @@ local Config = {
 local tostring = tostring
 local pairs = pairs
 local setmetatable = setmetatable
-local math_clamp = math.clamp
+local math_floor = math.floor
 local Vector2_new = Vector2.new
 local UDim2_new = UDim2.new
 local Color3_new = Color3.new
@@ -164,17 +158,12 @@ local function getDistance(part)
     return (part.Position - root.Position).Magnitude
 end
 
--- Converte distância em transparência (fade por distância)
-local function distanceToTransparency(dist)
-    local full = Config.ESP.FullOpacityDistance
-    local fade = Config.ESP.FadeDistance
-    if dist <= full then
-        return Config.ESP.MinTransparency
-    elseif dist >= fade then
-        return Config.ESP.MaxTransparency
+-- Formata distância legível para o range real do jogo (10m–5000m)
+local function formatDistance(dist)
+    if dist >= 1000 then
+        return string.format("%.1fkm", dist / 1000)
     else
-        local t = (dist - full) / (fade - full)
-        return t * Config.ESP.MaxTransparency
+        return string.format("%dm", math_floor(dist))
     end
 end
 
@@ -426,35 +415,16 @@ function TrinketESP:createBillboard(trinket, trinketName)
 
     self.espBillboards[trinket] = {
         billboard = billboard,
-        pill = pill,
-        pillStroke = pillStroke,
-        dot = dot,
-        nameLabel = nameLabel,
         distLabel = distLabel,
-        anchorLine = anchorLine,
     }
 end
 
--- Atualiza distância e transparência de todos os billboards ativos
+-- Atualiza distância de todos os billboards ativos
 function TrinketESP:updateDistances()
     for trinket, refs in pairs(self.espBillboards) do
         if not trinket or not trinket.Parent then continue end
-
         local dist = getDistance(trinket)
-        local transparency = distanceToTransparency(dist)
-
-        -- Atualiza texto de distância
-        refs.distLabel.Text = string.format("%dm", math.floor(dist))
-
-        -- Aplica fade em todos os elementos visíveis
-        refs.nameLabel.TextTransparency = transparency
-        refs.distLabel.TextTransparency = math_clamp(transparency + 0.2, 0, 1)
-        refs.dot.BackgroundTransparency = transparency
-        refs.anchorLine.BackgroundTransparency = math_clamp(0.6 + transparency * 0.4, 0, 1)
-        refs.pillStroke.Transparency = math_clamp(0.3 + transparency * 0.7, 0, 1)
-        refs.pill.BackgroundTransparency = math_clamp(
-            Config.Colors.PillBackgroundTransparency + transparency * 0.5, 0, 1
-        )
+        refs.distLabel.Text = formatDistance(dist)
     end
 end
 
