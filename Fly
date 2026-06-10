@@ -1,14 +1,9 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v7)
+-- Fly.lua (v8)
 --
--- Controles: WASD para direção. W/S seguem o pitch da câmera.
--- A/D são sempre horizontais. Space soma componente vertical pura.
--- Velocidade configurável via :setSpeed(n).
---
--- Correções v7:
---   - waitForChild substituído por WaitForChild nativo com pcall (sem loop manual)
---   - _watchPhysicsInstance com guard completo contra self destruído
---   - _attachToCharacter com lock para evitar chamadas simultâneas
+-- Correções v8:
+--   - task.spawn e task.defer substituídos por coroutine.wrap e delay(0)
+--     por incompatibilidade do Solara com a task library após atualização
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
@@ -78,22 +73,20 @@ function Fly.new(connectionManager)
     end
 
     return setmetatable_({
-        _connMgr        = cm,
-        _speed          = DEFAULT_SPEED,
-        enabled         = false,
-        _destroyed      = false,
+        _connMgr      = cm,
+        _speed        = DEFAULT_SPEED,
+        enabled       = false,
+        _destroyed    = false,
 
-        _bodyVelocity   = nil,
-        _bodyGyro       = nil,
-        _character      = nil,
-        _humanoid       = nil,
-        _rootPart       = nil,
+        _bodyVelocity = nil,
+        _bodyGyro     = nil,
+        _character    = nil,
+        _humanoid     = nil,
+        _rootPart     = nil,
 
-        _flyConn        = nil,
-        _spawnConn      = nil,
-
-        -- lock para evitar _attachToCharacter simultâneo
-        _attachLock     = false,
+        _flyConn      = nil,
+        _spawnConn    = nil,
+        _attachLock   = false,
     }, Fly)
 end
 
@@ -114,23 +107,28 @@ local function setPlatformStand(humanoid, state)
     pcall(function() humanoid.PlatformStand = state end)
 end
 
+local function safeSpawn(fn)
+    coroutine.wrap(fn)()
+end
+
+local function safeDefer(fn)
+    delay(0, fn)
+end
+
 --------------------------------------------------------------------------------
 -- Física
 --------------------------------------------------------------------------------
 
 function Fly:_watchPhysicsInstance(instance)
     instance.AncestryChanged:Connect(function()
-        -- guard completo: verifica destroyed, enabled, e rootPart antes de qualquer acesso
         if self._destroyed then return end
         if not self.enabled then return end
         if instance.Parent then return end
 
-        task.defer(function()
+        safeDefer(function()
             if self._destroyed then return end
             if not self.enabled then return end
             if not self._rootPart or not self._rootPart.Parent then return end
-
-            -- só recria se ainda é o mesmo personagem (evita recriar após respawn)
             if self._character ~= Players.LocalPlayer.Character then return end
 
             self:_removePhysics()
@@ -267,15 +265,13 @@ function Fly:_attachToCharacter(character)
     if self._attachLock then return end
     self._attachLock = true
 
-    -- sem yield: busca sincrona com fallback imediato
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
 
     self._attachLock = false
 
     if not rootPart or not humanoid then
-        -- tenta de novo no próximo frame sem yield bloqueante
-        task.defer(function()
+        safeDefer(function()
             if self._destroyed or not self.enabled then return end
             if Players.LocalPlayer.Character ~= character then return end
             self:_attachToCharacter(character)
@@ -329,14 +325,14 @@ function Fly:enable()
 
     local char = player.Character
     if char then
-        task.spawn(function()
+        safeSpawn(function()
             self:_attachToCharacter(char)
         end)
     end
 
     self._spawnConn = player.CharacterAdded:Connect(function(newChar)
         if not self.enabled or self._destroyed then return end
-        task.spawn(function()
+        safeSpawn(function()
             self:_attachToCharacter(newChar)
         end)
     end)
