@@ -98,6 +98,7 @@ local Config = {
     },
 
     Assets = {
+        -- Mantido para compatibilidade; comparações usam as constantes TEXTURE_* normalizadas
         PhoenixTexture = "rbxassetid://1536547385",
         IceEssenceTexture = "rbxassetid://20443483",
         IdolOfWarTexture = "rbxassetid://17010649377",
@@ -174,8 +175,19 @@ local function formatDistance(dist)
     end
 end
 
--- Função otimizada para limpar mesh IDs
-local function cleanMeshId(id)
+-- Normaliza texture IDs para comparação — remove prefixos rbxassetid:// e http://www.roblox.com/asset/?id=
+local function cleanTextureId(texture)
+    local str = tostring(texture)
+    str = str:gsub("rbxassetid://", "")
+    str = str:gsub("http://www%.roblox%.com/asset/%?id=", "")
+    str = str:gsub("https://www%.roblox%.com/asset/%?id=", "")
+    return str
+end
+
+-- IDs de textura já normalizados para comparação
+local TEXTURE_ICE_ESSENCE = "20443483"
+local TEXTURE_IDOL_OF_WAR = "17010649377"
+local TEXTURE_PHOENIX     = "1536547385"
     local str = tostring(id)
     str = str:gsub("%%20", "")
     str = str:gsub("%s+", "")
@@ -203,14 +215,14 @@ local function identifyByParticles(part)
 
     for _, child in ipairs(part:GetDescendants()) do
         if child.ClassName == "ParticleEmitter" then
+            local tex = cleanTextureId(child.Texture)
             if child.Name == "OrbParticle" then
                 hasOrb = true
-            elseif tostring(child.Texture) == Config.Assets.IdolOfWarTexture
-                or tostring(child.Texture) == "http://www.roblox.com/asset/?id=17010649377" then
+            elseif tex == TEXTURE_IDOL_OF_WAR then
                 return "Idol of War"
-            elseif tostring(child.Texture) == Config.Assets.IceEssenceTexture then
+            elseif tex == TEXTURE_ICE_ESSENCE then
                 return "Ice Essence"
-            elseif tostring(child.Texture) == Config.Assets.PhoenixTexture then
+            elseif tex == TEXTURE_PHOENIX then
                 local cs = child.Color
                 if cs and cs.Keypoints and #cs.Keypoints >= 2 then
                     local k1 = cs.Keypoints[1]
