@@ -38,10 +38,8 @@ local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/K
 --// Configuration
 local Config = {
     ESP = {
-        -- Pill principal (nome + dot)
-        PillSize = UDim2.new(0, 110, 0, 22),
         -- Frame que contém pill + dist tag + linha
-        BillboardSize = UDim2.new(0, 120, 0, 60),
+        BillboardSize = UDim2.new(0, 200, 0, 60),
         TextSize = 11,
         Font = Enum.Font.GothamBold,
         FontDist = Enum.Font.Gotham,
@@ -482,11 +480,18 @@ end
 
 function TrinketESP:onChildAdded(obj)
     if not self.enabled then return end
-    if not isTrinket(obj) or self._processedObjects[obj] then return end
-    table.insert(self._pendingTrinkets, obj)
-    if not self._processingQueue then
-        self:processQueue()
-    end
+    if self._processedObjects[obj] then return end
+
+    task.defer(function()
+        if not self.enabled or not obj.Parent then return end
+        if self._processedObjects[obj] then return end
+        if not isTrinket(obj) then return end
+
+        table.insert(self._pendingTrinkets, obj)
+        if not self._processingQueue then
+            self:processQueue()
+        end
+    end)
 end
 
 function TrinketESP:onChildRemoved(obj)
