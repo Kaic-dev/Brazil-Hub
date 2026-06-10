@@ -79,6 +79,7 @@ local Config = {
             ["Mysterious Artifact"] = Color3.new(0.2, 0.8, 0.2),
             ["Phoenix Flower"] = Color3.new(0, 0.207843, 0.392157),
             ["Rift Gem"] = Color3.new(1, 0.223529, 0.768627),
+            ["Ice Essence"] = Color3.new(0, 0.106, 0.596),
         },
     },
 
@@ -98,6 +99,7 @@ local Config = {
 
     Assets = {
         PhoenixTexture = "rbxassetid://1536547385",
+        IceEssenceTexture = "rbxassetid://20443483",
     },
 
     MeshIDs = {
@@ -128,6 +130,10 @@ local Config = {
         PhoenixFlower = {
             ColorSequenceKeypoint.new(0, Color3.new(0, 0.207843, 0.392157)),
             ColorSequenceKeypoint.new(1, Color3.new(1, 0.207843, 0.392157)),
+        },
+        IceEssence = {
+            ColorSequenceKeypoint.new(0, Color3.new(0, 0.106, 0.596)),
+            ColorSequenceKeypoint.new(1, Color3.new(0, 0.106, 0.596)),
         },
     },
 }
@@ -198,6 +204,8 @@ local function identifyByParticles(part)
         if child.ClassName == "ParticleEmitter" then
             if child.Name == "OrbParticle" then
                 hasOrb = true
+            elseif tostring(child.Texture) == Config.Assets.IceEssenceTexture then
+                return "Ice Essence"
             elseif tostring(child.Texture) == Config.Assets.PhoenixTexture then
                 local cs = child.Color
                 if cs and cs.Keypoints and #cs.Keypoints >= 2 then
