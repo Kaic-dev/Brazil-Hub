@@ -1,32 +1,32 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v5)
+-- Fly.lua (v6)
 --
--- Controles: WASD para direção. W/S seguem o pitch da câmera (câmera pra
--- baixo = desce, pra cima = sobe). A/D são sempre horizontais.
--- Space soma componente vertical pura (acelera subida).
+-- Controles: WASD para direção. W/S seguem o pitch da câmera.
+-- A/D são sempre horizontais. Space soma componente vertical pura.
 -- Velocidade configurável via :setSpeed(n).
 --
--- Implementação:
---   - BodyVelocity no HumanoidRootPart para movimento
---   - BodyGyro para manter o personagem upright (sem tombar)
---   - Humanoid.PlatformStand = true para suprimir animações de andar
---     (com fallback seguro caso o executor não permita)
---   - Reconecta automaticamente se o personagem re-spawnar
---   - AncestryChanged nas instâncias físicas para recriar sob demanda
---     (sem polling no Heartbeat)
---   - MaxForce Y liberado quando parado para evitar conflito com gravidade
+-- Correções v6:
+--   - pcall_ removido do hot path (Heartbeat); usado só em operações
+--     de setup/teardown onde falha é esperada
+--   - CFrame.lookAt substitui CFrame.new(pos, target) no gyro
+--   - BodyGyro.P definido explicitamente para evitar oscilação de correção
+--   - AncestryChanged agora vigia BV e BG independentemente
+--   - CurrentCamera cacheada por frame (evita property lookup repetido)
+--   - Threshold de input elevado de 0.01 para 0.05 (evita velocity flicker)
+--   - CharacterAdded aguarda HumanoidRootPart existir em vez de task.wait fixo
+--   - Separação de eixo horizontal/vertical antes de normalizar (sem oscilação
+--     de magnitude por vetores não-planares somados)
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local pcall_        = pcall
 local type_         = type
 local setmetatable_ = setmetatable
 
 --------------------------------------------------------------------------------
--- Fallback ConnectionManager (caso não seja injetado)
+-- Fallback ConnectionManager
 --------------------------------------------------------------------------------
 
 local _fallbackCM = {
@@ -38,7 +38,7 @@ local _fallbackCM = {
             end,
             disconnectAll = function()
                 for i = 1, #conns do
-                    pcall_(function() conns[i]:Disconnect() end)
+                    pcall(function() conns[i]:Disconnect() end)
                 end
                 conns = {}
             end,
@@ -52,13 +52,24 @@ local _fallbackCM = {
 
 local DEFAULT_SPEED   = 60
 local GYRO_MAX_TORQUE = 1e5
+local GYRO_P          = 1e4   -- stiffness explícito; evita oscilação do gyro
+local GYRO_D          = 50
 local BV_MAX_FORCE    = 1e5
+local INPUT_THRESHOLD = 0.05  -- magnitude mínima para considerar input válido
 
 local KEY_FORWARD  = Enum.KeyCode.W
 local KEY_BACKWARD = Enum.KeyCode.S
 local KEY_LEFT     = Enum.KeyCode.A
 local KEY_RIGHT    = Enum.KeyCode.D
 local KEY_UP       = Enum.KeyCode.Space
+
+-- MaxForce reutilizáveis (evita instanciar Vector3 todo frame)
+local MF_FULL = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
+local MF_NO_Y = Vector3.new(BV_MAX_FORCE, 0,            BV_MAX_FORCE)
+local V3_ZERO = Vector3.zero
+local V3_UP   = Vector3.new(0, 1, 0)
+local V3_RIGHT_FALLBACK = Vector3.new(1, 0, 0)
+local V3_LOOK_FALLBACK  = Vector3.new(0, 0, -1)
 
 --------------------------------------------------------------------------------
 -- Classe Fly
@@ -95,48 +106,41 @@ end
 -- Helpers
 --------------------------------------------------------------------------------
 
-local function safeSet(obj, prop, val)
-    pcall_(function() obj[prop] = val end)
-end
-
 local function safeDestroy(obj)
-    if obj then pcall_(obj.Destroy, obj) end
+    if obj then pcall(obj.Destroy, obj) end
 end
 
 local function setPlatformStand(humanoid, state)
     if not humanoid then return end
     if type_(sethiddenproperty) == "function" then
-        local ok = pcall_(sethiddenproperty, humanoid, "PlatformStand", state)
+        local ok = pcall(sethiddenproperty, humanoid, "PlatformStand", state)
         if ok then return end
     end
-    safeSet(humanoid, "PlatformStand", state)
+    pcall(function() humanoid.PlatformStand = state end)
+end
+
+-- Aguarda uma instância existir dentro do character (sem wait fixo)
+local function waitForChild(parent, name, timeout)
+    local t = 0
+    local STEP = 0.05
+    while t < (timeout or 5) do
+        local child = parent:FindFirstChild(name)
+        if child then return child end
+        task.wait(STEP)
+        t = t + STEP
+    end
+    return parent:FindFirstChild(name)
 end
 
 --------------------------------------------------------------------------------
--- Física: cria/remove BodyVelocity e BodyGyro
+-- Física
 --------------------------------------------------------------------------------
 
-function Fly:_createPhysics()
-    if not self._rootPart then return end
-
-    local bv = Instance.new("BodyVelocity")
-    bv.Name     = "_FlyBV"
-    bv.Velocity = Vector3.zero
-    bv.MaxForce = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-    bv.Parent   = self._rootPart
-    self._bodyVelocity = bv
-
-    local bg = Instance.new("BodyGyro")
-    bg.Name      = "_FlyBG"
-    bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
-    bg.D         = 50  -- reduzido de 100 para resistir menos ao movimento
-    bg.CFrame    = self._rootPart.CFrame
-    bg.Parent    = self._rootPart
-    self._bodyGyro = bg
-
-    bv.AncestryChanged:Connect(function()
+function Fly:_watchPhysicsInstance(instance)
+    -- Observa remoção de qualquer instância física individualmente
+    instance.AncestryChanged:Connect(function()
         if not self.enabled then return end
-        if bv.Parent then return end
+        if instance.Parent then return end
         task.defer(function()
             if not self.enabled then return end
             if not self._rootPart or not self._rootPart.Parent then return end
@@ -144,6 +148,30 @@ function Fly:_createPhysics()
             self:_createPhysics()
         end)
     end)
+end
+
+function Fly:_createPhysics()
+    if not self._rootPart then return end
+
+    local bv = Instance.new("BodyVelocity")
+    bv.Name     = "_FlyBV"
+    bv.Velocity = V3_ZERO
+    bv.MaxForce = MF_FULL
+    bv.Parent   = self._rootPart
+    self._bodyVelocity = bv
+
+    local bg = Instance.new("BodyGyro")
+    bg.Name      = "_FlyBG"
+    bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
+    bg.P         = GYRO_P   -- stiffness explícito
+    bg.D         = GYRO_D
+    bg.CFrame    = self._rootPart.CFrame
+    bg.Parent    = self._rootPart
+    self._bodyGyro = bg
+
+    -- Vigia BV e BG independentemente
+    self:_watchPhysicsInstance(bv)
+    self:_watchPhysicsInstance(bg)
 end
 
 function Fly:_removePhysics()
@@ -159,29 +187,38 @@ end
 
 function Fly:_startLoop()
     if self._flyConn then
-        pcall_(function() self._flyConn:Disconnect() end)
+        pcall(function() self._flyConn:Disconnect() end)
         self._flyConn = nil
     end
 
     self._flyConn = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
-        if not self._bodyVelocity or not self._bodyGyro then return end
-        if not self._rootPart or not self._rootPart.Parent then return end
 
+        local bv = self._bodyVelocity
+        local bg = self._bodyGyro
+        local rp = self._rootPart
+
+        -- guards sem pcall (hot path; se falhar é bug real)
+        if not bv or not bg then return end
+        if not rp or not rp.Parent then return end
+
+        -- cache da câmera por frame
         local cam = workspace.CurrentCamera
         if not cam then return end
 
-        local camCF = cam.CFrame
-        local look  = camCF.LookVector
-
+        local camCF    = cam.CFrame
+        local look     = camCF.LookVector
         local rightRaw = camCF.RightVector
-        local rightH   = Vector3.new(rightRaw.X, 0, rightRaw.Z)
+
+        -- right sempre no plano XZ
+        local rightH = Vector3.new(rightRaw.X, 0, rightRaw.Z)
         if rightH.Magnitude > 0.001 then
             rightH = rightH.Unit
         else
-            rightH = Vector3.new(1, 0, 0)
+            rightH = V3_RIGHT_FALLBACK
         end
 
+        -- leitura de input
         local uis      = UserInputService
         local forward  = uis:IsKeyDown(KEY_FORWARD)
         local backward = uis:IsKeyDown(KEY_BACKWARD)
@@ -189,67 +226,74 @@ function Fly:_startLoop()
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
         local up       = uis:IsKeyDown(KEY_UP)
 
-        local dir = Vector3.zero
+        -- acumula horizontal e vertical separadamente
+        -- (evita oscilação de magnitude por vetores não-planares somados)
+        local hDir = V3_ZERO
+        local vAdd = 0
 
-        if forward  then dir = dir + look   end
-        if backward then dir = dir - look   end
-        if rightKey then dir = dir + rightH end
-        if leftKey  then dir = dir - rightH end
-        if up       then dir = dir + Vector3.new(0, 1, 0) end
+        if forward  then hDir = hDir + look   end
+        if backward then hDir = hDir - look   end
+        if rightKey then hDir = hDir + rightH end
+        if leftKey  then hDir = hDir - rightH end
+        if up       then vAdd = vAdd + 1       end
 
-        local velocity
-        if dir.Magnitude > 0.01 then
-            velocity = dir.Unit * self._speed
-            -- força total nos 3 eixos durante o movimento
-            pcall_(function()
-                self._bodyVelocity.MaxForce = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-            end)
-        else
-            velocity = Vector3.zero
-            -- libera Y quando parado: evita conflito com gravidade
-            pcall_(function()
-                self._bodyVelocity.MaxForce = Vector3.new(BV_MAX_FORCE, 0, BV_MAX_FORCE)
-            end)
+        -- separa contribuição horizontal (XZ) e vertical (Y) do hDir
+        local hFlat = Vector3.new(hDir.X, 0, hDir.Z)
+        local pitchV = hDir.Y   -- componente Y vinda do pitch da câmera
+
+        local finalDir = V3_ZERO
+
+        if hFlat.Magnitude > 0.001 then
+            finalDir = hFlat.Unit
         end
 
-        pcall_(function() self._bodyVelocity.Velocity = velocity end)
+        -- reconstrói com vertical limpa
+        finalDir = Vector3.new(finalDir.X, pitchV + vAdd, finalDir.Z)
 
-        -- Gyro: só yaw da câmera, personagem nunca inclina
+        local velocity
+        if finalDir.Magnitude > INPUT_THRESHOLD then
+            velocity      = finalDir.Unit * self._speed
+            bv.MaxForce   = MF_FULL
+        else
+            velocity      = V3_ZERO
+            bv.MaxForce   = MF_NO_Y   -- libera Y; evita conflito com gravidade
+        end
+
+        bv.Velocity = velocity
+
+        -- gyro: só yaw, sem pitch/roll
+        -- CFrame.lookAt é mais estável que CFrame.new(pos, target)
         local lookH = Vector3.new(look.X, 0, look.Z)
         if lookH.Magnitude > 0.001 then
             lookH = lookH.Unit
         else
-            local rp = self._rootPart.CFrame.LookVector
-            lookH = Vector3.new(rp.X, 0, rp.Z)
-            if lookH.Magnitude > 0.001 then
-                lookH = lookH.Unit
-            else
-                lookH = Vector3.new(0, 0, -1)
-            end
+            local rpLook = rp.CFrame.LookVector
+            lookH = Vector3.new(rpLook.X, 0, rpLook.Z)
+            lookH = lookH.Magnitude > 0.001 and lookH.Unit or V3_LOOK_FALLBACK
         end
 
-        pcall_(function()
-            self._bodyGyro.CFrame = CFrame.new(Vector3.zero, lookH)
-        end)
+        bg.CFrame = CFrame.lookAt(V3_ZERO, lookH)
     end)
 end
 
 function Fly:_stopLoop()
     if self._flyConn then
-        pcall_(function() self._flyConn:Disconnect() end)
+        pcall(function() self._flyConn:Disconnect() end)
         self._flyConn = nil
     end
 end
 
 --------------------------------------------------------------------------------
--- Attach / detach ao personagem
+-- Attach / detach
 --------------------------------------------------------------------------------
 
 function Fly:_attachToCharacter(character)
     self:_detachFromCharacter()
 
+    -- aguarda HumanoidRootPart existir de fato (sem wait fixo)
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    local rootPart = waitForChild(character, "HumanoidRootPart")
+
     if not humanoid or not rootPart then return end
 
     self._character = character
@@ -298,7 +342,6 @@ function Fly:enable()
 
     self._spawnConn = player.CharacterAdded:Connect(function(newChar)
         if not self.enabled then return end
-        task.wait(0.2)
         self:_attachToCharacter(newChar)
     end)
     self._connMgr:add(self._spawnConn)
@@ -309,7 +352,7 @@ function Fly:disable()
     self.enabled = false
 
     if self._spawnConn then
-        pcall_(function() self._spawnConn:Disconnect() end)
+        pcall(function() self._spawnConn:Disconnect() end)
         self._spawnConn = nil
     end
 
@@ -317,8 +360,8 @@ function Fly:disable()
 end
 
 function Fly:destroy()
-    pcall_(function() self:disable() end)
-    pcall_(function() self._connMgr:disconnectAll() end)
+    pcall(function() self:disable() end)
+    pcall(function() self._connMgr:disconnectAll() end)
     self._connMgr = nil
 end
 
