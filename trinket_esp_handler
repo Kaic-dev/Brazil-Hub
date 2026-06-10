@@ -211,37 +211,45 @@ local function isTrinket(obj)
 end
 
 local function identifyByParticles(part)
-    local hasOrb, hasLight, hasSphere = false, false, false
+    if not part or not part.Parent then return nil end
 
-    for _, child in ipairs(part:GetDescendants()) do
-        if child.ClassName == "ParticleEmitter" then
-            local tex = cleanTextureId(child.Texture)
-            if child.Name == "OrbParticle" then
-                hasOrb = true
-            elseif tex == TEXTURE_IDOL_OF_WAR then
-                return "Idol of War"
-            elseif tex == TEXTURE_ICE_ESSENCE then
-                return "Ice Essence"
-            elseif tex == TEXTURE_PHOENIX then
-                local cs = child.Color
-                if cs and cs.Keypoints and #cs.Keypoints >= 2 then
-                    local k1 = cs.Keypoints[1]
-                    if k1.Value == Config.ColorSequences.PhoenixDown[1].Value then
-                        return "Phoenix Down"
-                    elseif k1.Value == Config.ColorSequences.AzaelHorn[1].Value then
-                        return "Azael Horn"
-                    elseif k1.Value == Config.ColorSequences.MysteriousArtifact[1].Value then
-                        return "Mysterious Artifact"
-                    elseif k1.Value == Config.ColorSequences.PhoenixFlower[1].Value then
-                        return "Phoenix Flower"
+    local hasOrb, hasLight, hasSphere = false, false, false
+    local ok, descendants = pcall(function() return part:GetDescendants() end)
+    if not ok then return nil end
+
+    for _, child in ipairs(descendants) do
+        if not child.Parent then continue end
+        local ok2, result = pcall(function()
+            if child.ClassName == "ParticleEmitter" then
+                local tex = cleanTextureId(child.Texture)
+                if child.Name == "OrbParticle" then
+                    hasOrb = true
+                elseif tex == TEXTURE_IDOL_OF_WAR then
+                    return "Idol of War"
+                elseif tex == TEXTURE_ICE_ESSENCE then
+                    return "Ice Essence"
+                elseif tex == TEXTURE_PHOENIX then
+                    local cs = child.Color
+                    if cs and cs.Keypoints and #cs.Keypoints >= 2 then
+                        local k1 = cs.Keypoints[1]
+                        if k1.Value == Config.ColorSequences.PhoenixDown[1].Value then
+                            return "Phoenix Down"
+                        elseif k1.Value == Config.ColorSequences.AzaelHorn[1].Value then
+                            return "Azael Horn"
+                        elseif k1.Value == Config.ColorSequences.MysteriousArtifact[1].Value then
+                            return "Mysterious Artifact"
+                        elseif k1.Value == Config.ColorSequences.PhoenixFlower[1].Value then
+                            return "Phoenix Flower"
+                        end
                     end
                 end
+            elseif child.ClassName == "PointLight" then
+                hasLight = true
+            elseif child.ClassName == "SpecialMesh" and child.MeshType == Config.MeshTypes.Sphere then
+                hasSphere = true
             end
-        elseif child.ClassName == "PointLight" then
-            hasLight = true
-        elseif child.ClassName == "SpecialMesh" and child.MeshType == Config.MeshTypes.Sphere then
-            hasSphere = true
-        end
+        end)
+        if ok2 and result then return result end
     end
 
     if hasOrb and hasLight and hasSphere then
