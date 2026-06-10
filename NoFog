@@ -63,7 +63,6 @@ function NoFog:apply()
     local Lighting = game:GetService("Lighting")
     Lighting.FogEnd   = 100000
     Lighting.FogStart = 99999
-    Lighting.FogColor = Color3.new(1, 1, 1)
     for _, child in ipairs(Lighting:GetChildren()) do
         if isTargetEffect(child) then
             pcall(function() child.Enabled = false end)
@@ -91,6 +90,7 @@ function NoFog:enable()
     self:apply()
 
     local Lighting = game:GetService("Lighting")
+
     self._connMgr:add(
         Lighting.ChildAdded:Connect(function(child)
             if self.enabled and isTargetEffect(child) then
@@ -103,6 +103,17 @@ function NoFog:enable()
         end),
         "Lighting.ChildAdded"
     )
+
+    for _, prop in ipairs({"FogEnd", "FogStart", "FogColor"}) do
+        self._connMgr:add(
+            Lighting:GetPropertyChangedSignal(prop):Connect(function()
+                if self.enabled then
+                    pcall(function() self:apply() end)
+                end
+            end),
+            "Lighting." .. prop
+        )
+    end
 end
 
 function NoFog:disable()
