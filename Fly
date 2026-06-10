@@ -39,7 +39,7 @@ local _fallbackCM = {
 --------------------------------------------------------------------------------
 
 local DEFAULT_SPEED   = 60
-local GYRO_MAX_TORQUE = 1e5
+local GYRO_MAX_TORQUE = math.huge
 local GYRO_P          = 1e4
 local GYRO_D          = 50
 local BV_MAX_FORCE    = math.huge
