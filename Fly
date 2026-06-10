@@ -1,8 +1,9 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v1)
+-- Fly.lua (v4)
 --
--- Controles: WASD para direção horizontal, Space para subir, LeftShift para
--- descer. Velocidade configurável via :setSpeed(n).
+-- Controles: WASD para direção. W/S seguem o pitch da câmera (câmera pra
+-- baixo = desce, pra cima = sobe). A/D são sempre horizontais.
+-- Velocidade configurável via :setSpeed(n).
 --
 -- Implementação:
 --   - BodyVelocity no HumanoidRootPart para movimento
@@ -10,15 +11,17 @@
 --   - Humanoid.PlatformStand = true para suprimir animações de andar
 --     (com fallback seguro caso o executor não permita)
 --   - Reconecta automaticamente se o personagem re-spawnar
+--   - AncestryChanged nas instâncias físicas para recriar sob demanda
+--     (sem polling no Heartbeat)
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local pcall_       = pcall
-local type_        = type
-local setmetatable_= setmetatable
+local pcall_        = pcall
+local type_         = type
+local setmetatable_ = setmetatable
 
 --------------------------------------------------------------------------------
 -- Fallback ConnectionManager (caso não seja injetado)
@@ -45,16 +48,14 @@ local _fallbackCM = {
 -- Constantes
 --------------------------------------------------------------------------------
 
-local DEFAULT_SPEED    = 60     -- studs/s
-local GYRO_MAX_TORQUE  = 1e5
-local BV_MAX_FORCE     = 1e5
+local DEFAULT_SPEED   = 60
+local GYRO_MAX_TORQUE = 1e5
+local BV_MAX_FORCE    = 1e5
 
 local KEY_FORWARD  = Enum.KeyCode.W
 local KEY_BACKWARD = Enum.KeyCode.S
 local KEY_LEFT     = Enum.KeyCode.A
 local KEY_RIGHT    = Enum.KeyCode.D
-local KEY_UP       = Enum.KeyCode.Space
-local KEY_DOWN     = Enum.KeyCode.LeftShift
 
 --------------------------------------------------------------------------------
 -- Classe Fly
@@ -72,21 +73,18 @@ function Fly.new(connectionManager)
     end
 
     return setmetatable_({
-        _connMgr        = cm,
-        _speed          = DEFAULT_SPEED,
-        enabled         = false,
+        _connMgr      = cm,
+        _speed        = DEFAULT_SPEED,
+        enabled       = false,
 
-        -- instâncias físicas criadas em _attachToCharacter
-        _bodyVelocity   = nil,
-        _bodyGyro       = nil,
-        _character      = nil,
-        _humanoid       = nil,
-        _rootPart       = nil,
+        _bodyVelocity = nil,
+        _bodyGyro     = nil,
+        _character    = nil,
+        _humanoid     = nil,
+        _rootPart     = nil,
 
-        -- conexão de loop de voo (desconectada individualmente ao mudar de char)
-        _flyConn        = nil,
-        -- conexão de respawn (vive enquanto o módulo existir)
-        _spawnConn      = nil,
+        _flyConn      = nil,
+        _spawnConn    = nil,
     }, Fly)
 end
 
@@ -102,15 +100,12 @@ local function safeDestroy(obj)
     if obj then pcall_(obj.Destroy, obj) end
 end
 
--- Tenta setar PlatformStand; silencia falha em executores restritos
 local function setPlatformStand(humanoid, state)
     if not humanoid then return end
-    -- tenta via sethiddenproperty primeiro
     if type_(sethiddenproperty) == "function" then
         local ok = pcall_(sethiddenproperty, humanoid, "PlatformStand", state)
         if ok then return end
     end
-    -- fallback direto (pode falhar em alguns executores — ignoramos)
     safeSet(humanoid, "PlatformStand", state)
 end
 
@@ -121,22 +116,31 @@ end
 function Fly:_createPhysics()
     if not self._rootPart then return end
 
-    -- BodyVelocity
     local bv = Instance.new("BodyVelocity")
-    bv.Name        = "_FlyBV"
-    bv.Velocity    = Vector3.zero
-    bv.MaxForce    = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-    bv.Parent      = self._rootPart
+    bv.Name     = "_FlyBV"
+    bv.Velocity = Vector3.zero
+    bv.MaxForce = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
+    bv.Parent   = self._rootPart
     self._bodyVelocity = bv
 
-    -- BodyGyro (mantém o personagem upright)
     local bg = Instance.new("BodyGyro")
-    bg.Name       = "_FlyBG"
-    bg.MaxTorque  = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
-    bg.D          = 100
-    bg.CFrame     = self._rootPart.CFrame
-    bg.Parent     = self._rootPart
+    bg.Name      = "_FlyBG"
+    bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
+    bg.D         = 100
+    bg.CFrame    = self._rootPart.CFrame
+    bg.Parent    = self._rootPart
     self._bodyGyro = bg
+
+    bv.AncestryChanged:Connect(function()
+        if not self.enabled then return end
+        if bv.Parent then return end
+        task.defer(function()
+            if not self.enabled then return end
+            if not self._rootPart or not self._rootPart.Parent then return end
+            self:_removePhysics()
+            self:_createPhysics()
+        end)
+    end)
 end
 
 function Fly:_removePhysics()
@@ -151,7 +155,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_startLoop()
-    -- garante que não haja loop duplicado
     if self._flyConn then
         pcall_(function() self._flyConn:Disconnect() end)
         self._flyConn = nil
@@ -159,42 +162,39 @@ function Fly:_startLoop()
 
     self._flyConn = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
+        if not self._bodyVelocity or not self._bodyGyro then return end
         if not self._rootPart or not self._rootPart.Parent then return end
-        
-        -- recria física se tiver sido removida externamente
-        if not self._bodyVelocity or not self._bodyVelocity.Parent
-        or not self._bodyGyro    or not self._bodyGyro.Parent then
-            self:_removePhysics()
-            self:_createPhysics()
-            return
+
+        local cam = workspace.CurrentCamera
+        if not cam then return end
+
+        local camCF = cam.CFrame
+        local look  = camCF.LookVector
+
+        local rightRaw = camCF.RightVector
+        local rightH   = Vector3.new(rightRaw.X, 0, rightRaw.Z)
+        if rightH.Magnitude > 0.001 then
+            rightH = rightH.Unit
+        else
+            rightH = Vector3.new(1, 0, 0)
         end
 
-        -- câmera define o eixo de orientação horizontal
-        local cam    = workspace.CurrentCamera
-        if not cam then return end
-        local look   = cam.CFrame.LookVector
-        local right  = cam.CFrame.RightVector
-
-        -- lê teclas pressionadas
-        local uis = UserInputService
+        local uis      = UserInputService
         local forward  = uis:IsKeyDown(KEY_FORWARD)
         local backward = uis:IsKeyDown(KEY_BACKWARD)
         local leftKey  = uis:IsKeyDown(KEY_LEFT)
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
-        local up       = uis:IsKeyDown(KEY_UP)
-        local down     = uis:IsKeyDown(KEY_DOWN)
 
-        -- monta vetor de direção
         local dir = Vector3.zero
 
-        if forward  then dir = dir + Vector3.new(look.X,  0, look.Z) end
-        if backward then dir = dir - Vector3.new(look.X,  0, look.Z) end
-        if rightKey then dir = dir + Vector3.new(right.X, 0, right.Z) end
-        if leftKey  then dir = dir - Vector3.new(right.X, 0, right.Z) end
-        if up       then dir = dir + Vector3.new(0, 1, 0) end
-        if down     then dir = dir - Vector3.new(0, 1, 0) end
+        -- W/S seguem o look completo da câmera (pitch incluído)
+        if forward  then dir = dir + look   end
+        if backward then dir = dir - look   end
 
-        -- normaliza somente se houver input (evita NaN em magnitude zero)
+        -- A/D sempre horizontais
+        if rightKey then dir = dir + rightH end
+        if leftKey  then dir = dir - rightH end
+
         local velocity
         if dir.Magnitude > 0.01 then
             velocity = dir.Unit * self._speed
@@ -204,9 +204,22 @@ function Fly:_startLoop()
 
         pcall_(function() self._bodyVelocity.Velocity = velocity end)
 
-        -- gyro acompanha orientação da câmera (sem pitch/roll)
+        -- Gyro: só yaw da câmera, personagem nunca inclina
+        local lookH = Vector3.new(look.X, 0, look.Z)
+        if lookH.Magnitude > 0.001 then
+            lookH = lookH.Unit
+        else
+            local rp = self._rootPart.CFrame.LookVector
+            lookH = Vector3.new(rp.X, 0, rp.Z)
+            if lookH.Magnitude > 0.001 then
+                lookH = lookH.Unit
+            else
+                lookH = Vector3.new(0, 0, -1)
+            end
+        end
+
         pcall_(function()
-            self._bodyGyro.CFrame = CFrame.new(Vector3.zero, Vector3.new(look.X, 0, look.Z))
+            self._bodyGyro.CFrame = CFrame.new(Vector3.zero, lookH)
         end)
     end)
 end
@@ -223,7 +236,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_attachToCharacter(character)
-    -- remove estado anterior primeiro
     self:_detachFromCharacter()
 
     local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -269,16 +281,13 @@ function Fly:enable()
     local player = Players.LocalPlayer
     if not player then return end
 
-    -- attach ao personagem atual
     local char = player.Character
     if char then
         self:_attachToCharacter(char)
     end
 
-    -- reconecta ao spawnar / re-spawnar
     self._spawnConn = player.CharacterAdded:Connect(function(newChar)
         if not self.enabled then return end
-        -- pequena espera para o personagem carregar completamente
         task.wait(0.2)
         self:_attachToCharacter(newChar)
     end)
@@ -289,8 +298,6 @@ function Fly:disable()
     if not self.enabled then return end
     self.enabled = false
 
-    -- desconecta CharacterAdded se gerenciado externamente pelo connMgr
-    -- a desconexão individual via _spawnConn garante limpeza imediata
     if self._spawnConn then
         pcall_(function() self._spawnConn:Disconnect() end)
         self._spawnConn = nil
