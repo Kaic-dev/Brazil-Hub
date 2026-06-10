@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------
--- trinket_esp_handler.lua (v4 — blindado)
+-- trinket_esp_handler.lua (v5 — blindado)
 --
 -- RISCOS CORRIGIDOS NESTA VERSÃO:
 -- [1] isTrinket sem pcall: obj.ClassName explode se obj for destruído antes
@@ -18,6 +18,12 @@
 -- [6] disable() reseta trinketCache como variável global do módulo — se houver
 --     duas instâncias de TrinketESP ativas (raro mas possível), uma limpa o
 --     cache da outra. Corrigido: cache movido para dentro da instância.
+-- [7] getTrinketInfo acessava part.Material, part.BrickColor.Name e
+--     part:FindFirstChildOfClass() sem pcall: se a part for destruída entre
+--     isTrinket e esse ponto, o pcall_ externo do _runQueue captura o erro,
+--     infoOk vira false e o billboard nunca é criado — mesmo para itens
+--     desconhecidos com StringValue "ID". Corrigido: bloco de material
+--     isolado em pcall_, retornando matResult or "Unknown".
 --------------------------------------------------------------------------------
 
 local Workspace  = game:GetService("Workspace")
@@ -86,13 +92,12 @@ do
     if not (type_(_rawCM) == "table" and type_(_rawCM.new) == "function") then
         _rawCM = nil
     end
-    -- expõe ao escopo do módulo
     if _rawCM then
-        _fallbackCM = _rawCM  -- reutiliza a variável como "ConnectionManager"
+        _fallbackCM = _rawCM
     end
 end
 
-local ConnectionManager = _fallbackCM   -- sempre válido aqui
+local ConnectionManager = _fallbackCM
 
 --------------------------------------------------------------------------------
 -- CONFIGURAÇÃO
@@ -185,7 +190,6 @@ local Config = {
     },
 }
 
--- Upvalues: evita lookup duplo de tabela no hot path
 local CFG_ESP            = Config.ESP
 local PHOENIX_TEXTURE    = Config.Assets.PhoenixTexture
 local ICE_TEXTURE        = Config.Assets.IceEssenceTexture
@@ -221,27 +225,20 @@ end
 
 --------------------------------------------------------------------------------
 -- IDENTIFICAÇÃO
--- FIX [1]: isTrinket usa pcall no acesso a ClassName para não explodir
---          caso o objeto seja destruído exatamente antes de ser lido.
--- FIX [3]: scanLevel virou função local flat (sem closure recriada a cada
---          chamada), eliminando alocação por trinket processado.
 --------------------------------------------------------------------------------
 
--- FIX [3]: estado de scan exposto como upvalues do módulo e resetado antes
--- de cada chamada a identifyByParticles, evitando closure recriada.
 local _scanOrb    = false
 local _scanLight  = false
 local _scanSphere = false
 
 local function scanLevel(container)
-    -- Lê filhos diretos; desce em Attachments (onde partículas vivem)
     local ok, children = pcall_(container.GetChildren, container)
     if not ok or type_(children) ~= "table" then return nil end
 
     for i = 1, #children do
         local child = children[i]
         local cnOk, cn = pcall_(function() return child.ClassName end)
-        if not cnOk then continue end   -- objeto destruído durante iteração
+        if not cnOk then continue end
 
         if cn == "ParticleEmitter" then
             local nameOk, childName = pcall_(function() return child.Name end)
@@ -292,7 +289,6 @@ local function scanLevel(container)
 end
 
 local function identifyByParticles(part)
-    -- Reseta estado do scan (FIX [3]: sem closure, estado compartilhado)
     _scanOrb    = false
     _scanLight  = false
     _scanSphere = false
@@ -307,7 +303,6 @@ local function identifyByParticles(part)
     return nil
 end
 
--- FIX [2]: identifyGem isola todos os acessos em pcall
 local function identifyGem(part)
     local ok, r, g, b, name = pcall_(function()
         local cv = part.BrickColor.Color
@@ -333,12 +328,10 @@ local function cleanMeshId(id)
     return tostring_(id):gsub("%%20", ""):gsub("%s+", ""):gsub("rbxassetid://", "")
 end
 
--- FIX [1]: isTrinket usa pcall no acesso a ClassName
 local function isTrinket(obj, cache)
     local cached = cache[obj]
     if cached ~= nil then return cached end
 
-    -- ClassName pode explodir se obj foi destruído antes de chegar aqui
     local cnOk, cn = pcall_(function() return obj.ClassName end)
     if not cnOk or (cn ~= "Part" and cn ~= "MeshPart") then
         cache[obj] = false
@@ -351,6 +344,10 @@ local function isTrinket(obj, cache)
     return result
 end
 
+-- FIX [7]: bloco de material totalmente isolado em pcall_.
+-- Antes, part.Material (e acessos subsequentes) sem proteção faziam o pcall_
+-- externo do _runQueue capturar o erro → infoOk = false → billboard nunca
+-- criado, mesmo para itens válidos com StringValue "ID" desconhecidos.
 local function getTrinketInfo(part)
     -- 1. Partículas
     local byParticle = identifyByParticles(part)
@@ -379,27 +376,37 @@ local function getTrinketInfo(part)
         if known then return known end
     end
 
-    -- 3. Material (acessos diretos: estamos dentro de pcall no _runQueue)
-    local mat = part.Material
+    -- 3. Material — FIX [7]: todos os acessos isolados em pcall_
+    local matResult
+    pcall_(function()
+        local mat = part.Material
 
-    if mat == MAT_SLATE then return "Idol of the Forgotten" end
-
-    if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
-        return "Opal"
-    end
-
-    if mat == MAT_NEON then
-        local bcName = part.BrickColor.Name
-        if bcName == "Gold" or bcName == "New Yeller" then
-            return "Lost Sunshine"
+        if mat == MAT_SLATE then
+            matResult = "Idol of the Forgotten"
+            return
         end
-        if part:FindFirstChildOfClass("PointLight") then
-            return "Amulet of the White King"
-        end
-        return "Nightstone"
-    end
 
-    return "Unknown"
+        if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
+            matResult = "Opal"
+            return
+        end
+
+        if mat == MAT_NEON then
+            local bcName = part.BrickColor.Name
+            if bcName == "Gold" or bcName == "New Yeller" then
+                matResult = "Lost Sunshine"
+            elseif part:FindFirstChildOfClass("PointLight") then
+                matResult = "Amulet of the White King"
+            else
+                matResult = "Nightstone"
+            end
+        end
+    end)
+
+    -- matResult nil significa que nenhum material bateu ou que a part foi
+    -- destruída durante a checagem — em ambos os casos retorna "Unknown"
+    -- sem propagar erro para o _runQueue.
+    return matResult or "Unknown"
 end
 
 --------------------------------------------------------------------------------
@@ -425,8 +432,6 @@ function TrinketESP.new()
         _queueHead         = 1,
         _queueRunning      = false,
 
-        -- FIX [6]: cache por instância (não global), múltiplas instâncias
-        -- não interferem entre si.
         _trinketCache      = setmetatable_({}, { __mode = "k" }),
         _processedObjects  = setmetatable_({}, { __mode = "k" }),
 
@@ -529,7 +534,6 @@ function TrinketESP:createBillboard(trinket, trinketName)
     anchorLine.Size                   = UDim2.new(0, CFG_ESP.AnchorLineWidth, 0, 14)
     anchorLine.BorderSizePixel        = 0
 
-    -- Parenteia por último: evita render de UI incompleta
     billboard.Parent = trinket
 
     self.espBillboards[trinket] = {
@@ -538,7 +542,6 @@ function TrinketESP:createBillboard(trinket, trinketName)
     }
 end
 
--- FIX [5]: acesso a refs.distLabel envolto em pcall por label
 function TrinketESP:updateDistances()
     local root = getLocalRootPart()
 
@@ -567,13 +570,12 @@ function TrinketESP:removeBillboard(trinket)
         safeDestroy(refs.billboard)
         self.espBillboards[trinket] = nil
     end
-    self._trinketCache[trinket]     = nil   -- FIX [6]: cache por instância
+    self._trinketCache[trinket]     = nil
     self._processedObjects[trinket] = nil
 end
 
 --------------------------------------------------------------------------------
 -- FILA DE PROCESSAMENTO
--- FIX [4]: compactação reatribui a variável local "q" corretamente.
 --------------------------------------------------------------------------------
 
 function TrinketESP:_runQueue()
@@ -584,8 +586,6 @@ function TrinketESP:_runQueue()
         local max = CFG_ESP.MaxProcessPerFrame
 
         while self.enabled do
-            -- FIX [4]: sempre lê self._queue direto — não mantém cópia local
-            -- que pode ficar stale após compactação
             if self._queueHead > #self._queue then break end
 
             local processed = 0
@@ -614,14 +614,13 @@ function TrinketESP:_runQueue()
                 end
             end
 
-            -- Compactação: evita crescimento ilimitado da tabela
             if self._queueHead > 500 then
                 local old  = self._queue
                 local newQ = {}
                 for i = self._queueHead, #old do
                     newQ[#newQ + 1] = old[i]
                 end
-                self._queue     = newQ   -- FIX [4]: reatribui no self, não numa cópia local
+                self._queue     = newQ
                 self._queueHead = 1
             end
 
@@ -649,7 +648,7 @@ end
 
 function TrinketESP:onChildAdded(obj)
     if not self.enabled then return end
-    if not isTrinket(obj, self._trinketCache) then return end  -- FIX [1] + [6]
+    if not isTrinket(obj, self._trinketCache) then return end
     if self._processedObjects[obj] then return end
     self:_enqueue(obj)
 end
@@ -732,12 +731,11 @@ function TrinketESP:disable()
         self:removeBillboard(keys[i])
     end
 
-    self._queue       = {}
-    self._queueHead   = 1
+    self._queue        = {}
+    self._queueHead    = 1
     self._queueRunning = false
 
-    -- FIX [6]: reseta apenas o cache desta instância
-    self._trinketCache    = setmetatable_({}, { __mode = "k" })
+    self._trinketCache     = setmetatable_({}, { __mode = "k" })
     self._processedObjects = setmetatable_({}, { __mode = "k" })
 end
 
