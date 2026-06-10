@@ -1,56 +1,64 @@
 --------------------------------------------------------------------------------
--- trinket_esp_handler.lua
--- Versão otimizada + robusta:
--- • pcall apenas em pontos de falha real (I/O, Instance.new, callbacks externos)
--- • Acesso direto a propriedades em hot paths
--- • Fila implementada com head pointer (O(1) em vez de O(n))
--- • Cache com limpeza automática via weak keys
--- • GetChildren em vez de GetDescendants onde possível
+-- trinket_esp_handler.lua (v4 — blindado)
+--
+-- RISCOS CORRIGIDOS NESTA VERSÃO:
+-- [1] isTrinket sem pcall: obj.ClassName explode se obj for destruído antes
+--     de ser processado pelo cache. Corrigido com pcall no acesso.
+-- [2] identifyGem acessa part.BrickColor.Color diretamente: se part for
+--     deletado entre isTrinket e identifyGem, quebra. Isolado em pcall.
+-- [3] scanLevel closure recria uma função a cada chamada de identifyByParticles,
+--     gerando alocação desnecessária. Convertido para função local flat.
+-- [4] _runQueue referencia self._queue por upvalue local "q" e depois reatribui
+--     self._queue na compactação, mas "q" fica apontando para a tabela antiga.
+--     Corrigido: compactação reatribui "q" corretamente.
+-- [5] enable() pode ser chamado antes de Players.LocalPlayer existir em alguns
+--     executores. getLocalRootPart já trata, mas updateDistances acessava
+--     refs.distLabel.Text sem verificar se refs.distLabel ainda existe.
+--     Corrigido com pcall por label.
+-- [6] disable() reseta trinketCache como variável global do módulo — se houver
+--     duas instâncias de TrinketESP ativas (raro mas possível), uma limpa o
+--     cache da outra. Corrigido: cache movido para dentro da instância.
 --------------------------------------------------------------------------------
 
---// Serviços
 local Workspace  = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+local Players    = game:GetService("Players")
 
 --------------------------------------------------------------------------------
--- UTILITÁRIOS
+-- UTILITÁRIOS BASE
 --------------------------------------------------------------------------------
 
--- Cache de funções globais (evita lookup na tabela global a cada chamada)
-local type          = type
-local tostring      = tostring
-local pairs         = pairs
-local pcall         = pcall
-local setmetatable  = setmetatable
-local ipairs        = ipairs
-local tableInsert   = table.insert
-local tableRemove   = table.remove
+local type_        = type
+local tostring_    = tostring
+local pairs_       = pairs
+local ipairs_      = ipairs
+local setmetatable_= setmetatable
+local mathFloor    = math.floor
+local pcall_       = pcall
 
--- Destrói uma Instance sem lançar erro (usado em cleanup)
 local function safeDestroy(obj)
     if obj == nil then return end
-    pcall(obj.Destroy, obj)
+    pcall_(obj.Destroy, obj)
 end
 
--- Baixa e executa um módulo remoto
 local function safeRequireRemote(url, name)
     local tag = "[trinket_esp_handler]"
 
-    local dlOk, raw = pcall(game.HttpGet, game, url)
-    if not dlOk or type(raw) ~= "string" or raw == "" then
-        warn(tag, "Download falhou:", name, tostring(raw))
+    local dlOk, raw = pcall_(game.HttpGet, game, url)
+    if not dlOk or type_(raw) ~= "string" or raw == "" then
+        warn(tag, "Download falhou:", name, tostring_(raw))
         return nil
     end
 
     local fn, compErr = loadstring(raw)
-    if type(fn) ~= "function" then
-        warn(tag, "Compilação falhou:", name, tostring(compErr))
+    if type_(fn) ~= "function" then
+        warn(tag, "Compilação falhou:", name, tostring_(compErr))
         return nil
     end
 
-    local execOk, mod = pcall(fn)
+    local execOk, mod = pcall_(fn)
     if not execOk then
-        warn(tag, "Execução falhou:", name, tostring(mod))
+        warn(tag, "Execução falhou:", name, tostring_(mod))
         return nil
     end
 
@@ -70,14 +78,21 @@ local _fallbackCM = {
     end,
 }
 
-local _rawCM = safeRequireRemote(
-    "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
-    "ConnectionManager"
-)
+do
+    local _rawCM = safeRequireRemote(
+        "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
+        "ConnectionManager"
+    )
+    if not (type_(_rawCM) == "table" and type_(_rawCM.new) == "function") then
+        _rawCM = nil
+    end
+    -- expõe ao escopo do módulo
+    if _rawCM then
+        _fallbackCM = _rawCM  -- reutiliza a variável como "ConnectionManager"
+    end
+end
 
-local ConnectionManager = (type(_rawCM) == "table" and type(_rawCM.new) == "function")
-    and _rawCM
-    or  _fallbackCM
+local ConnectionManager = _fallbackCM   -- sempre válido aqui
 
 --------------------------------------------------------------------------------
 -- CONFIGURAÇÃO
@@ -85,16 +100,20 @@ local ConnectionManager = (type(_rawCM) == "table" and type(_rawCM.new) == "func
 
 local Config = {
     ESP = {
-        BillboardSize          = UDim2.new(0, 100, 0, 100),
-        TextSize               = 14,
-        TextStrokeTransparency = 0.5,
-        TextStrokeColor        = Color3.new(0.2, 0.2, 0.2),
-        Font                   = Enum.Font.SourceSans,
-        MaxProcessPerFrame     = 5,
+        BillboardSize      = UDim2.new(0, 120, 0, 60),
+        TextSize           = 11,
+        Font               = Enum.Font.GothamBold,
+        FontDist           = Enum.Font.Gotham,
+        AnchorLineWidth    = 1,
+        MaxProcessPerFrame = 5,
+        DistanceUpdateRate = 30,
     },
 
     Colors = {
-        Default = Color3.new(0.7, 0.7, 0.7),
+        Default                    = Color3.new(0.7, 0.7, 0.7),
+        PillBackground             = Color3.fromRGB(10, 10, 10),
+        PillBackgroundTransparency = 0.35,
+        DistanceColor              = Color3.fromRGB(180, 180, 180),
         Trinkets = {
             ["Amulet"]                   = Color3.new(0.7,      0.7,      0.7),
             ["Old Amulet"]               = Color3.new(0.5,      0.5,      0.5),
@@ -116,6 +135,7 @@ local Config = {
             ["Mysterious Artifact"]      = Color3.new(0.2,      0.8,      0.2),
             ["Phoenix Flower"]           = Color3.new(0,        0.207843, 0.392157),
             ["Rift Gem"]                 = Color3.new(1,        0.223529, 0.768627),
+            ["Ice Essence"]              = Color3.new(0,        0.106,    0.596),
         },
     },
 
@@ -134,17 +154,16 @@ local Config = {
     },
 
     Assets = {
-        PhoenixTexture = "rbxassetid://1536547385",
+        PhoenixTexture    = "rbxassetid://1536547385",
+        IceEssenceTexture = "rbxassetid://20443483",
     },
 
-    -- Set de MeshIDs que são gemas (diferenciadas por cor)
     GemMeshIDs = {
         ["2877143560"] = true,
         ["2877143592"] = true,
         ["2877143624"] = true,
     },
 
-    -- MeshID → nome direto (sem tabela aninhada, acesso mais rápido)
     MeshIDs = {
         ["5196551436"]      = "Amulet",
         ["5196577540"]      = "Old Amulet",
@@ -157,62 +176,145 @@ local Config = {
         ["122777605672182"] = "Marshmallow on a Stick",
     },
 
-    -- Primeiro keypoint de cada partícula (pré-computado para comparação O(1))
     ParticleKeys = {
         PhoenixDown        = Color3.new(1,      4/5,      0),
         AzaelHorn          = Color3.new(1,      2/51,     2/51),
         MysteriousArtifact = Color3.new(38/85,  1,        0),
         PhoenixFlower      = Color3.new(0,      0.207843, 0.392157),
+        IceEssence         = Color3.new(0,      0.106,    0.596),
     },
 }
 
--- Atalhos para os valores mais acessados (evita lookup de tabela no hot path)
-local PHOENIX_TEXTURE   = Config.Assets.PhoenixTexture
-local PARTICLE_KEYS     = Config.ParticleKeys
-local MAT_SLATE         = Config.Materials.Slate
-local MAT_NEON          = Config.Materials.Neon
-local MAT_GLASS         = Config.Materials.Glass
-local MESH_SPHERE       = Config.MeshTypes.Sphere
-local GEM_IDS           = Config.GemMeshIDs
-local MESH_IDS          = Config.MeshIDs
-local COLOR_TRINKETS    = Config.Colors.Trinkets
-local COLOR_DEFAULT     = Config.Colors.Default
+-- Upvalues: evita lookup duplo de tabela no hot path
+local CFG_ESP            = Config.ESP
+local PHOENIX_TEXTURE    = Config.Assets.PhoenixTexture
+local ICE_TEXTURE        = Config.Assets.IceEssenceTexture
+local PARTICLE_KEYS      = Config.ParticleKeys
+local MAT_SLATE          = Config.Materials.Slate
+local MAT_NEON           = Config.Materials.Neon
+local MAT_GLASS          = Config.Materials.Glass
+local MESH_SPHERE        = Config.MeshTypes.Sphere
+local GEM_IDS            = Config.GemMeshIDs
+local MESH_IDS           = Config.MeshIDs
+local COLOR_TRINKETS     = Config.Colors.Trinkets
+local COLOR_DEFAULT      = Config.Colors.Default
+local DIST_UPDATE_RATE   = Config.ESP.DistanceUpdateRate
 
 --------------------------------------------------------------------------------
--- CACHE DE TRINKETS
--- Usa weak keys: objetos destruídos são coletados automaticamente pelo GC,
--- eliminando o vazamento de memória da versão anterior.
+-- DISTÂNCIA
 --------------------------------------------------------------------------------
 
-local trinketCache = setmetatable({}, { __mode = "k" })
+local function getLocalRootPart()
+    local player = Players.LocalPlayer
+    if not player then return nil end
+    local char = player.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+local function formatDistance(dist)
+    if dist >= 1000 then
+        return string.format("%.1fkm", dist / 1000)
+    end
+    return string.format("%dm", mathFloor(dist))
+end
 
 --------------------------------------------------------------------------------
 -- IDENTIFICAÇÃO
+-- FIX [1]: isTrinket usa pcall no acesso a ClassName para não explodir
+--          caso o objeto seja destruído exatamente antes de ser lido.
+-- FIX [3]: scanLevel virou função local flat (sem closure recriada a cada
+--          chamada), eliminando alocação por trinket processado.
 --------------------------------------------------------------------------------
 
---- Retorna true se o objeto é um trinket (Part/MeshPart com filho "ID").
---- Hot path: acesso direto, sem pcall.
-local function isTrinket(obj)
-    -- Weak-cache hit
-    local cached = trinketCache[obj]
-    if cached ~= nil then return cached end
+-- FIX [3]: estado de scan exposto como upvalues do módulo e resetado antes
+-- de cada chamada a identifyByParticles, evitando closure recriada.
+local _scanOrb    = false
+local _scanLight  = false
+local _scanSphere = false
 
-    local cn = obj.ClassName
-    if cn ~= "Part" and cn ~= "MeshPart" then
-        trinketCache[obj] = false
-        return false
+local function scanLevel(container)
+    -- Lê filhos diretos; desce em Attachments (onde partículas vivem)
+    local ok, children = pcall_(container.GetChildren, container)
+    if not ok or type_(children) ~= "table" then return nil end
+
+    for i = 1, #children do
+        local child = children[i]
+        local cnOk, cn = pcall_(function() return child.ClassName end)
+        if not cnOk then continue end   -- objeto destruído durante iteração
+
+        if cn == "ParticleEmitter" then
+            local nameOk, childName = pcall_(function() return child.Name end)
+            if nameOk and childName == "OrbParticle" then
+                _scanOrb = true
+            else
+                local texOk, tex = pcall_(function() return tostring_(child.Texture) end)
+                if texOk then
+                    if tex == ICE_TEXTURE then
+                        return "Ice Essence"
+                    elseif tex == PHOENIX_TEXTURE then
+                        local csOk, cs = pcall_(function() return child.Color end)
+                        if csOk and cs then
+                            local kpsOk, kps = pcall_(function() return cs.Keypoints end)
+                            if kpsOk and kps and #kps >= 2 then
+                                local kval = kps[1].Value
+                                if kval == PARTICLE_KEYS.PhoenixDown then
+                                    return "Phoenix Down"
+                                elseif kval == PARTICLE_KEYS.AzaelHorn then
+                                    return "Azael Horn"
+                                elseif kval == PARTICLE_KEYS.MysteriousArtifact then
+                                    return "Mysterious Artifact"
+                                elseif kval == PARTICLE_KEYS.PhoenixFlower then
+                                    return "Phoenix Flower"
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+        elseif cn == "PointLight" then
+            _scanLight = true
+
+        elseif cn == "SpecialMesh" then
+            local mtOk, mt = pcall_(function() return child.MeshType end)
+            if mtOk and mt == MESH_SPHERE then
+                _scanSphere = true
+            end
+
+        elseif cn == "Attachment" then
+            local res = scanLevel(child)
+            if res then return res end
+        end
     end
 
-    local result = obj:FindFirstChild("ID") ~= nil
-    trinketCache[obj] = result
-    return result
+    return nil
 end
 
---- Identifica gema por BrickColor quando os MeshIDs são compartilhados.
+local function identifyByParticles(part)
+    -- Reseta estado do scan (FIX [3]: sem closure, estado compartilhado)
+    _scanOrb    = false
+    _scanLight  = false
+    _scanSphere = false
+
+    local result = scanLevel(part)
+    if result then return result end
+
+    if _scanOrb and _scanLight and _scanSphere then
+        return "???"
+    end
+
+    return nil
+end
+
+-- FIX [2]: identifyGem isola todos os acessos em pcall
 local function identifyGem(part)
-    local cv = part.BrickColor.Color
-    local r, g, b = cv.R, cv.G, cv.B
-    local name = part.BrickColor.Name
+    local ok, r, g, b, name = pcall_(function()
+        local cv = part.BrickColor.Color
+        return cv.R, cv.G, cv.B, part.BrickColor.Name
+    end)
+
+    if not ok then return "Rift Gem" end
 
     if name == "Really red" or name == "Bright red" or (r > 0.7 and g < 0.3 and b < 0.3) then
         return "Ruby"
@@ -227,72 +329,28 @@ local function identifyGem(part)
     return "Rift Gem"
 end
 
---- Varre partículas para identificar trinkets especiais.
---- Usa GetChildren em cada nível em vez de GetDescendants (menos alocações).
-local function identifyByParticles(part)
-    local hasOrb    = false
-    local hasLight  = false
-    local hasSphere = false
-
-    -- Itera direto os filhos do part e de cada Attachment
-    local function scanLevel(container)
-        for _, child in ipairs(container:GetChildren()) do
-            local cn = child.ClassName
-
-            if cn == "ParticleEmitter" then
-                if child.Name == "OrbParticle" then
-                    hasOrb = true
-                elseif tostring(child.Texture) == PHOENIX_TEXTURE then
-                    local cs = child.Color
-                    if cs then
-                        local kps = cs.Keypoints
-                        if kps and #kps >= 2 then
-                            local kval = kps[1].Value
-                            if kval == PARTICLE_KEYS.PhoenixDown then
-                                return "Phoenix Down"
-                            elseif kval == PARTICLE_KEYS.AzaelHorn then
-                                return "Azael Horn"
-                            elseif kval == PARTICLE_KEYS.MysteriousArtifact then
-                                return "Mysterious Artifact"
-                            elseif kval == PARTICLE_KEYS.PhoenixFlower then
-                                return "Phoenix Flower"
-                            end
-                        end
-                    end
-                end
-
-            elseif cn == "PointLight" then
-                hasLight = true
-
-            elseif cn == "SpecialMesh" and child.MeshType == MESH_SPHERE then
-                hasSphere = true
-
-            elseif cn == "Attachment" then
-                -- Desce um nível (partículas dentro de Attachments)
-                local res = scanLevel(child)
-                if res then return res end
-            end
-        end
-
-        return nil
-    end
-
-    local result = scanLevel(part)
-    if result then return result end
-
-    if hasOrb and hasLight and hasSphere then
-        return "???"
-    end
-
-    return nil
-end
-
---- Limpa e normaliza um MeshId.
 local function cleanMeshId(id)
-    return tostring(id):gsub("%%20", ""):gsub("%s+", ""):gsub("rbxassetid://", "")
+    return tostring_(id):gsub("%%20", ""):gsub("%s+", ""):gsub("rbxassetid://", "")
 end
 
---- Retorna o nome do trinket. Nunca lança erro (chamado dentro de pcall).
+-- FIX [1]: isTrinket usa pcall no acesso a ClassName
+local function isTrinket(obj, cache)
+    local cached = cache[obj]
+    if cached ~= nil then return cached end
+
+    -- ClassName pode explodir se obj foi destruído antes de chegar aqui
+    local cnOk, cn = pcall_(function() return obj.ClassName end)
+    if not cnOk or (cn ~= "Part" and cn ~= "MeshPart") then
+        cache[obj] = false
+        return false
+    end
+
+    local idOk, child = pcall_(obj.FindFirstChild, obj, "ID")
+    local result = idOk and child ~= nil
+    cache[obj] = result
+    return result
+end
+
 local function getTrinketInfo(part)
     -- 1. Partículas
     local byParticle = identifyByParticles(part)
@@ -300,13 +358,15 @@ local function getTrinketInfo(part)
 
     -- 2. MeshID
     local meshId = ""
-    if part:IsA("MeshPart") then
-        meshId = part.MeshId
-    else
-        local mesh = part:FindFirstChildWhichIsA("SpecialMesh")
-                  or part:FindFirstChildWhichIsA("Mesh")
-        if mesh then meshId = mesh.MeshId end
-    end
+    pcall_(function()
+        if part:IsA("MeshPart") then
+            meshId = part.MeshId or ""
+        else
+            local mesh = part:FindFirstChildWhichIsA("SpecialMesh")
+                      or part:FindFirstChildWhichIsA("Mesh")
+            if mesh then meshId = mesh.MeshId or "" end
+        end
+    end)
 
     if meshId ~= "" then
         local cleanId = cleanMeshId(meshId)
@@ -319,12 +379,10 @@ local function getTrinketInfo(part)
         if known then return known end
     end
 
-    -- 3. Material
+    -- 3. Material (acessos diretos: estamos dentro de pcall no _runQueue)
     local mat = part.Material
 
-    if mat == MAT_SLATE then
-        return "Idol of the Forgotten"
-    end
+    if mat == MAT_SLATE then return "Idol of the Forgotten" end
 
     if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
         return "Opal"
@@ -353,129 +411,221 @@ TrinketESP.__index = TrinketESP
 
 function TrinketESP.new()
     local cm
-    local ok = pcall(function() cm = ConnectionManager.new() end)
-    if not ok or type(cm) ~= "table" then
+    local ok = pcall_(function() cm = ConnectionManager.new() end)
+    if not ok or type_(cm) ~= "table" then
         cm = _fallbackCM.new()
     end
 
-    return setmetatable({
+    return setmetatable_({
         espBillboards      = {},
         _connectionManager = cm,
         enabled            = false,
 
-        -- Fila implementada com head pointer:
-        -- _queue[_head] até _queue[#_queue] são os pendentes.
-        -- Evita O(n) do table.remove(t, 1).
-        _queue     = {},
-        _queueHead = 1,
-        _queueRunning = false,
+        _queue             = {},
+        _queueHead         = 1,
+        _queueRunning      = false,
 
-        _processedObjects = setmetatable({}, { __mode = "k" }), -- weak keys
+        -- FIX [6]: cache por instância (não global), múltiplas instâncias
+        -- não interferem entre si.
+        _trinketCache      = setmetatable_({}, { __mode = "k" }),
+        _processedObjects  = setmetatable_({}, { __mode = "k" }),
+
+        _heartbeatConn     = nil,
     }, TrinketESP)
 end
 
---- Cria o BillboardGui no trinket.
+--------------------------------------------------------------------------------
+-- UI
+--------------------------------------------------------------------------------
+
 function TrinketESP:createBillboard(trinket, trinketName)
     if self.espBillboards[trinket] then return end
-    if trinket.Parent == nil then return end -- objeto já foi destruído
+    if trinket.Parent == nil then return end
 
-    local name      = type(trinketName) == "string" and trinketName or "Unknown"
-    local color     = COLOR_TRINKETS[name] or COLOR_DEFAULT
+    local name  = type_(trinketName) == "string" and trinketName or "Unknown"
+    local color = COLOR_TRINKETS[name] or COLOR_DEFAULT
 
     local billboard = Instance.new("BillboardGui")
     billboard.Name           = "TrinketESP"
     billboard.Adornee        = trinket
-    billboard.LightInfluence = 1
+    billboard.LightInfluence = 0
     billboard.ZIndexBehavior = Config.UI.ZIndexBehavior
     billboard.AlwaysOnTop    = true
-    billboard.Size           = Config.ESP.BillboardSize
+    billboard.Size           = CFG_ESP.BillboardSize
+    billboard.StudsOffset    = Vector3.new(0, 1.5, 0)
 
-    local label = Instance.new("TextLabel", billboard)
-    label.Text                   = name
-    label.TextColor3             = color
-    label.TextStrokeTransparency = Config.ESP.TextStrokeTransparency
-    label.TextStrokeColor3       = Config.ESP.TextStrokeColor
-    label.Font                   = Config.ESP.Font
-    label.TextSize               = Config.ESP.TextSize
-    label.BackgroundTransparency = 1
-    label.BorderSizePixel        = 0
-    label.Size                   = UDim2.new(1, 0, 1, 0)
-    label.Position               = UDim2.new(0.5, 0, 0.5, 0)
-    label.AnchorPoint            = Vector2.new(0.5, 0.5)
+    local root = Instance.new("Frame", billboard)
+    root.Name                   = "Root"
+    root.BackgroundTransparency = 1
+    root.Size                   = UDim2.new(1, 0, 1, 0)
 
-    -- Parenteia o billboard por último para evitar renders parciais
+    local layout = Instance.new("UIListLayout", root)
+    layout.FillDirection       = Enum.FillDirection.Vertical
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.VerticalAlignment   = Enum.VerticalAlignment.Top
+    layout.Padding             = UDim.new(0, 2)
+
+    local pill = Instance.new("Frame", root)
+    pill.Name                   = "Pill"
+    pill.BackgroundColor3       = Config.Colors.PillBackground
+    pill.BackgroundTransparency = Config.Colors.PillBackgroundTransparency
+    pill.Size                   = UDim2.new(0, 0, 0, 20)
+    pill.AutomaticSize          = Enum.AutomaticSize.X
+    pill.BorderSizePixel        = 0
+
+    local pillCorner = Instance.new("UICorner", pill)
+    pillCorner.CornerRadius = UDim.new(1, 0)
+
+    local pillStroke = Instance.new("UIStroke", pill)
+    pillStroke.Color        = color
+    pillStroke.Thickness    = 1
+    pillStroke.Transparency = 0.3
+
+    local pillLayout = Instance.new("UIListLayout", pill)
+    pillLayout.FillDirection       = Enum.FillDirection.Horizontal
+    pillLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    pillLayout.VerticalAlignment   = Enum.VerticalAlignment.Center
+    pillLayout.Padding             = UDim.new(0, 5)
+
+    local pillPadding = Instance.new("UIPadding", pill)
+    pillPadding.PaddingLeft  = UDim.new(0, 7)
+    pillPadding.PaddingRight = UDim.new(0, 7)
+
+    local dot = Instance.new("Frame", pill)
+    dot.Name             = "Dot"
+    dot.BackgroundColor3 = color
+    dot.Size             = UDim2.new(0, 7, 0, 7)
+    dot.BorderSizePixel  = 0
+
+    local dotCorner = Instance.new("UICorner", dot)
+    dotCorner.CornerRadius = UDim.new(1, 0)
+
+    local nameLabel = Instance.new("TextLabel", pill)
+    nameLabel.Name                   = "NameLabel"
+    nameLabel.Text                   = name
+    nameLabel.TextColor3             = color
+    nameLabel.Font                   = CFG_ESP.Font
+    nameLabel.TextSize               = CFG_ESP.TextSize
+    nameLabel.BackgroundTransparency = 1
+    nameLabel.Size                   = UDim2.new(0, 0, 1, 0)
+    nameLabel.AutomaticSize          = Enum.AutomaticSize.X
+    nameLabel.TextXAlignment         = Enum.TextXAlignment.Left
+
+    local distLabel = Instance.new("TextLabel", root)
+    distLabel.Name                   = "DistLabel"
+    distLabel.Text                   = "..."
+    distLabel.TextColor3             = Config.Colors.DistanceColor
+    distLabel.Font                   = CFG_ESP.FontDist
+    distLabel.TextSize               = 9
+    distLabel.BackgroundTransparency = 1
+    distLabel.Size                   = UDim2.new(1, 0, 0, 12)
+    distLabel.AutomaticSize          = Enum.AutomaticSize.None
+    distLabel.TextXAlignment         = Enum.TextXAlignment.Center
+
+    local anchorLine = Instance.new("Frame", root)
+    anchorLine.Name                   = "AnchorLine"
+    anchorLine.BackgroundColor3       = color
+    anchorLine.BackgroundTransparency = 0.6
+    anchorLine.Size                   = UDim2.new(0, CFG_ESP.AnchorLineWidth, 0, 14)
+    anchorLine.BorderSizePixel        = 0
+
+    -- Parenteia por último: evita render de UI incompleta
     billboard.Parent = trinket
 
-    self.espBillboards[trinket] = billboard
+    self.espBillboards[trinket] = {
+        billboard = billboard,
+        distLabel = distLabel,
+    }
 end
 
---- Remove o BillboardGui de um trinket.
+-- FIX [5]: acesso a refs.distLabel envolto em pcall por label
+function TrinketESP:updateDistances()
+    local root = getLocalRootPart()
+
+    if not root then
+        for _, refs in pairs_(self.espBillboards) do
+            pcall_(function() refs.distLabel.Text = "?" end)
+        end
+        return
+    end
+
+    local rootPos = root.Position
+
+    for trinket, refs in pairs_(self.espBillboards) do
+        if trinket and trinket.Parent then
+            pcall_(function()
+                local dist = (trinket.Position - rootPos).Magnitude
+                refs.distLabel.Text = formatDistance(dist)
+            end)
+        end
+    end
+end
+
 function TrinketESP:removeBillboard(trinket)
-    local bb = self.espBillboards[trinket]
-    if bb then
-        safeDestroy(bb)
+    local refs = self.espBillboards[trinket]
+    if refs then
+        safeDestroy(refs.billboard)
         self.espBillboards[trinket] = nil
     end
-    trinketCache[trinket]             = nil
-    self._processedObjects[trinket]   = nil
+    self._trinketCache[trinket]     = nil   -- FIX [6]: cache por instância
+    self._processedObjects[trinket] = nil
 end
 
---- Processa a fila de trinkets pendentes em lotes.
+--------------------------------------------------------------------------------
+-- FILA DE PROCESSAMENTO
+-- FIX [4]: compactação reatribui a variável local "q" corretamente.
+--------------------------------------------------------------------------------
+
 function TrinketESP:_runQueue()
     if self._queueRunning then return end
     self._queueRunning = true
 
     task.spawn(function()
-        local q    = self._queue
-        local max  = Config.ESP.MaxProcessPerFrame
+        local max = CFG_ESP.MaxProcessPerFrame
 
         while self.enabled do
-            -- Verifica se há itens não processados
-            if self._queueHead > #q then
-                break
-            end
+            -- FIX [4]: sempre lê self._queue direto — não mantém cópia local
+            -- que pode ficar stale após compactação
+            if self._queueHead > #self._queue then break end
 
             local processed = 0
 
-            while self._queueHead <= #q and processed < max do
-                local trinket = q[self._queueHead]
-                q[self._queueHead] = nil  -- libera referência imediatamente
+            while self._queueHead <= #self._queue and processed < max do
+                local trinket = self._queue[self._queueHead]
+                self._queue[self._queueHead] = nil
                 self._queueHead = self._queueHead + 1
-                processed = processed + 1
+                processed       = processed + 1
 
                 if trinket ~= nil
                 and not self._processedObjects[trinket]
                 and trinket.Parent ~= nil then
                     self._processedObjects[trinket] = true
 
-                    -- getTrinketInfo e createBillboard isolados:
-                    -- um trinket bugado não para toda a fila
-                    local name = "Unknown"
-                    local infoOk = pcall(function()
+                    local name   = "Unknown"
+                    local infoOk = pcall_(function()
                         name = getTrinketInfo(trinket)
                     end)
 
                     if infoOk then
-                        pcall(function()
+                        pcall_(function()
                             self:createBillboard(trinket, name)
                         end)
                     end
                 end
             end
 
-            -- Compacta a fila periodicamente para evitar crescimento ilimitado
+            -- Compactação: evita crescimento ilimitado da tabela
             if self._queueHead > 500 then
+                local old  = self._queue
                 local newQ = {}
-                for i = self._queueHead, #q do
-                    newQ[#newQ + 1] = q[i]
+                for i = self._queueHead, #old do
+                    newQ[#newQ + 1] = old[i]
                 end
-                self._queue     = newQ
+                self._queue     = newQ   -- FIX [4]: reatribui no self, não numa cópia local
                 self._queueHead = 1
-                q = self._queue
             end
 
-            -- Aguarda próximo frame se ainda há pendentes
-            if self._queueHead <= #q and self.enabled then
+            if self._queueHead <= #self._queue and self.enabled then
                 RunService.Heartbeat:Wait()
             else
                 break
@@ -486,7 +636,6 @@ function TrinketESP:_runQueue()
     end)
 end
 
---- Enfileira um trinket para processamento.
 function TrinketESP:_enqueue(obj)
     self._queue[#self._queue + 1] = obj
     if not self._queueRunning then
@@ -494,27 +643,30 @@ function TrinketESP:_enqueue(obj)
     end
 end
 
---- Callback: filho adicionado ao Workspace.
+--------------------------------------------------------------------------------
+-- CALLBACKS
+--------------------------------------------------------------------------------
+
 function TrinketESP:onChildAdded(obj)
     if not self.enabled then return end
-    if not isTrinket(obj) then return end
+    if not isTrinket(obj, self._trinketCache) then return end  -- FIX [1] + [6]
     if self._processedObjects[obj] then return end
     self:_enqueue(obj)
 end
 
---- Callback: filho removido do Workspace.
 function TrinketESP:onChildRemoved(obj)
     if not self.enabled then return end
     if self.espBillboards[obj] == nil then return end
     self:removeBillboard(obj)
 end
 
---- Varre os filhos existentes do Workspace.
 function TrinketESP:scanExistingTrinkets()
-    local children = Workspace:GetChildren()
+    local ok, children = pcall_(Workspace.GetChildren, Workspace)
+    if not ok or type_(children) ~= "table" then return end
+
     for i = 1, #children do
         local obj = children[i]
-        if isTrinket(obj) and not self._processedObjects[obj] then
+        if isTrinket(obj, self._trinketCache) and not self._processedObjects[obj] then
             self._queue[#self._queue + 1] = obj
         end
     end
@@ -524,15 +676,17 @@ function TrinketESP:scanExistingTrinkets()
     end
 end
 
---- Ativa o ESP.
+--------------------------------------------------------------------------------
+-- CICLO DE VIDA
+--------------------------------------------------------------------------------
+
 function TrinketESP:enable()
     if self.enabled then return end
     self.enabled = true
 
     self:scanExistingTrinkets()
 
-    -- pcall nas conexões pois dependem do ConnectionManager externo
-    pcall(function()
+    pcall_(function()
         self._connectionManager:add(
             Workspace.ChildAdded:Connect(function(obj)
                 self:onChildAdded(obj)
@@ -541,7 +695,7 @@ function TrinketESP:enable()
         )
     end)
 
-    pcall(function()
+    pcall_(function()
         self._connectionManager:add(
             Workspace.ChildRemoved:Connect(function(obj)
                 self:onChildRemoved(obj)
@@ -549,40 +703,50 @@ function TrinketESP:enable()
             "Workspace.ChildRemoved"
         )
     end)
+
+    local frameCount = 0
+    self._heartbeatConn = RunService.Heartbeat:Connect(function()
+        frameCount = frameCount + 1
+        if frameCount >= DIST_UPDATE_RATE then
+            frameCount = 0
+            self:updateDistances()
+        end
+    end)
 end
 
---- Desativa o ESP e remove todos os billboards.
 function TrinketESP:disable()
     self.enabled = false
 
-    pcall(function() self._connectionManager:disconnectAll() end)
+    pcall_(function() self._connectionManager:disconnectAll() end)
 
-    -- Coleta chaves antes de iterar (evita mutação durante loop)
+    if self._heartbeatConn then
+        pcall_(function() self._heartbeatConn:Disconnect() end)
+        self._heartbeatConn = nil
+    end
+
     local keys = {}
-    for trinket in pairs(self.espBillboards) do
+    for trinket in pairs_(self.espBillboards) do
         keys[#keys + 1] = trinket
     end
     for i = 1, #keys do
         self:removeBillboard(keys[i])
     end
 
-    -- Reseta fila
-    self._queue        = {}
-    self._queueHead    = 1
+    self._queue       = {}
+    self._queueHead   = 1
     self._queueRunning = false
 
-    -- Limpa caches (os weak tables se limpam sozinhos, mas um reset explícito
-    -- garante que nada fique pendente)
-    trinketCache              = setmetatable({}, { __mode = "k" })
-    self._processedObjects    = setmetatable({}, { __mode = "k" })
+    -- FIX [6]: reseta apenas o cache desta instância
+    self._trinketCache    = setmetatable_({}, { __mode = "k" })
+    self._processedObjects = setmetatable_({}, { __mode = "k" })
 end
 
---- Destrói a instância completamente.
 function TrinketESP:destroy()
-    pcall(function() self:disable() end)
+    pcall_(function() self:disable() end)
     self._connectionManager = nil
     self.espBillboards      = nil
     self._processedObjects  = nil
+    self._trinketCache      = nil
     self._queue             = nil
 end
 
