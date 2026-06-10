@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v10)
+-- Fly.lua (v11)
 --
 -- Arquitetura simplificada: um único Heartbeat gerencia tudo.
 -- Sem yields, defers, spawns ou AncestryChanged no caminho crítico.
@@ -52,7 +52,6 @@ local KEY_RIGHT    = Enum.KeyCode.D
 local KEY_UP       = Enum.KeyCode.Space
 
 local MF_FULL           = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-local MF_NO_Y           = Vector3.new(BV_MAX_FORCE, 0,            BV_MAX_FORCE)
 local V3_ZERO           = Vector3.zero
 local V3_RIGHT_FALLBACK = Vector3.new(1, 0, 0)
 local V3_LOOK_FALLBACK  = Vector3.new(0, 0, -1)
@@ -93,13 +92,30 @@ local function safeDestroy(obj)
     if obj then pcall(obj.Destroy, obj) end
 end
 
-local function setPlatformStand(humanoid, state)
+-- Aplica ou remove todas as travas do humanoid que causam freezes periódicos:
+--   PlatformStand : desativa o controle de movimento do humanoid
+--   AutoRotate    : evita que o humanoid brigue com o BodyGyro
+--   ChangeState   : Physics = engine não toca na física; GettingUp = retoma normal
+local function lockHumanoid(humanoid, locked)
     if not humanoid then return end
+
     if type_(sethiddenproperty) == "function" then
-        local ok = pcall(sethiddenproperty, humanoid, "PlatformStand", state)
-        if ok then return end
+        pcall(sethiddenproperty, humanoid, "PlatformStand", locked)
+    else
+        pcall(function() humanoid.PlatformStand = locked end)
     end
-    pcall(function() humanoid.PlatformStand = state end)
+
+    pcall(function() humanoid.AutoRotate = not locked end)
+
+    if locked then
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+        end)
+    else
+        pcall(function()
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end)
+    end
 end
 
 local function getCharacterParts()
@@ -118,7 +134,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_createPhysics(rootPart)
-    -- limpa anterior antes de criar
     self:_removePhysics()
 
     local bv = Instance.new("BodyVelocity")
@@ -170,29 +185,31 @@ function Fly:_startHeartbeat()
     self._heartbeat = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
 
-        -- resolve personagem a cada frame (sem cache entre frames)
         local humanoid, rootPart = getCharacterParts()
         if not humanoid or not rootPart then return end
 
-        -- PlatformStand: reaplica se o humanoid mudou (respawn)
+        -- Detecta troca de humanoid (respawn) e limpa estado anterior
         if humanoid ~= lastHumanoid then
             if lastHumanoid then
-                setPlatformStand(lastHumanoid, false)
+                lockHumanoid(lastHumanoid, false)
             end
-            setPlatformStand(humanoid, true)
             lastHumanoid = humanoid
         end
 
-        -- recria física se inválida (sumiu ou está no rootPart errado)
+        -- Reaplicado todo frame: sobrescreve qualquer reset do engine/servidor
+        -- antes que ele vire um freeze visível
+        lockHumanoid(humanoid, true)
+
+        -- Recria física se inválida
         if not self:_physicsValid(rootPart) then
             self:_createPhysics(rootPart)
-            return -- aguarda próximo frame com física pronta
+            return
         end
 
         local bv = self._bodyVelocity
         local bg = self._bodyGyro
 
-        -- câmera
+        -- Câmera
         local cam = workspace.CurrentCamera
         if not cam then return end
 
@@ -207,7 +224,7 @@ function Fly:_startHeartbeat()
             rightH = V3_RIGHT_FALLBACK
         end
 
-        -- input
+        -- Input
         local uis      = UserInputService
         local forward  = uis:IsKeyDown(KEY_FORWARD)
         local backward = uis:IsKeyDown(KEY_BACKWARD)
@@ -215,7 +232,7 @@ function Fly:_startHeartbeat()
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
         local up       = uis:IsKeyDown(KEY_UP)
 
-        -- direção: horizontal e vertical separadas
+        -- Direção: horizontal e vertical separadas
         local hDir = V3_ZERO
         local vAdd = 0
 
@@ -234,17 +251,15 @@ function Fly:_startHeartbeat()
         end
         finalDir = Vector3.new(finalDir.X, pitchV + vAdd, finalDir.Z)
 
-        -- velocidade
-        -- DEPOIS (fix)
+        -- Velocidade: MaxForce sempre cheio — segura o personagem no ar ao soltar teclas
         if finalDir.Magnitude > INPUT_THRESHOLD then
-            bv.MaxForce = MF_FULL
             bv.Velocity = finalDir.Unit * self._speed
         else
-            bv.MaxForce = MF_FULL   -- ← Y também travado, personagem flutua no lugar
             bv.Velocity = V3_ZERO
         end
+        bv.MaxForce = MF_FULL
 
-        -- gyro: só yaw
+        -- Gyro: só yaw
         local lookH = Vector3.new(look.X, 0, look.Z)
         if lookH.Magnitude > 0.001 then
             lookH = lookH.Unit
@@ -280,14 +295,11 @@ function Fly:enable()
     self.enabled = true
     self:_startHeartbeat()
 
-    -- reconecta PlatformStand ao respawnar
     local player = Players.LocalPlayer
     if not player then return end
 
     self._spawnConn = player.CharacterAdded:Connect(function()
         if not self.enabled then return end
-        -- física será recriada automaticamente pelo Heartbeat
-        -- só precisa limpar a física do personagem anterior
         self:_removePhysics()
     end)
     self._connMgr:add(self._spawnConn)
@@ -305,10 +317,9 @@ function Fly:disable()
         self._spawnConn = nil
     end
 
-    -- restaura PlatformStand
     local humanoid, _ = getCharacterParts()
     if humanoid then
-        setPlatformStand(humanoid, false)
+        lockHumanoid(humanoid, false)
     end
 end
 
