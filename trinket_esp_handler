@@ -78,6 +78,8 @@ local Config = {
             ["Phoenix Flower"] = Color3.new(0, 0.207843, 0.392157),
             ["Rift Gem"] = Color3.new(1, 0.223529, 0.768627),
             ["Ice Essence"] = Color3.new(0, 0.106, 0.596),
+            ["Idol of War"] = Color3.new(0.8, 0.2, 0.1),
+            ["Unknown"] = Color3.new(0.6, 0.6, 0.6),
         },
     },
 
@@ -98,6 +100,7 @@ local Config = {
     Assets = {
         PhoenixTexture = "rbxassetid://1536547385",
         IceEssenceTexture = "rbxassetid://20443483",
+        IdolOfWarTexture = "rbxassetid://17010649377",
     },
 
     MeshIDs = {
@@ -202,6 +205,9 @@ local function identifyByParticles(part)
         if child.ClassName == "ParticleEmitter" then
             if child.Name == "OrbParticle" then
                 hasOrb = true
+            elseif tostring(child.Texture) == Config.Assets.IdolOfWarTexture
+                or tostring(child.Texture) == "http://www.roblox.com/asset/?id=17010649377" then
+                return "Idol of War"
             elseif tostring(child.Texture) == Config.Assets.IceEssenceTexture then
                 return "Ice Essence"
             elseif tostring(child.Texture) == Config.Assets.PhoenixTexture then
@@ -462,9 +468,11 @@ function TrinketESP:processQueue()
                 if trinket and trinket.Parent and not self._processedObjects[trinket] then
                     self._processedObjects[trinket] = true
                     local trinketName = getTrinketInfo(trinket)
-                    pcall(function()
-                        self:createBillboard(trinket, trinketName)
-                    end)
+                    if trinketName then
+                        pcall(function()
+                            self:createBillboard(trinket, trinketName)
+                        end)
+                    end
                 end
 
                 processed = processed + 1
