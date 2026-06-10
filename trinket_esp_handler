@@ -344,12 +344,13 @@ function TrinketESP:createBillboard(trinket, trinketName)
     layout.Padding = UDim.new(0, 2)
     layout.Parent = root
 
-    -- Pill: fundo escuro + borda colorida
+    -- Pill: fundo escuro + borda colorida — tamanho automático pelo conteúdo
     local pill = Instance_new("Frame")
     pill.Name = "Pill"
     pill.BackgroundColor3 = Config.Colors.PillBackground
     pill.BackgroundTransparency = Config.Colors.PillBackgroundTransparency
-    pill.Size = UDim2_new(0, 110, 0, 20)
+    pill.Size = UDim2_new(0, 0, 0, 20)
+    pill.AutomaticSize = Enum.AutomaticSize.X
     pill.BorderSizePixel = 0
     pill.Parent = root
 
@@ -387,7 +388,7 @@ function TrinketESP:createBillboard(trinket, trinketName)
     dotCorner.CornerRadius = UDim.new(1, 0)
     dotCorner.Parent = dot
 
-    -- Label com nome do trinket
+    -- Label com nome do trinket — tamanho automático pelo texto
     local nameLabel = Instance_new("TextLabel")
     nameLabel.Name = "NameLabel"
     nameLabel.Text = trinketName
@@ -395,12 +396,12 @@ function TrinketESP:createBillboard(trinket, trinketName)
     nameLabel.Font = Config.ESP.Font
     nameLabel.TextSize = Config.ESP.TextSize
     nameLabel.BackgroundTransparency = 1
-    nameLabel.Size = UDim2_new(1, -20, 1, 0)
+    nameLabel.Size = UDim2_new(0, 0, 1, 0)
+    nameLabel.AutomaticSize = Enum.AutomaticSize.X
     nameLabel.TextXAlignment = Enum.TextXAlignment.Left
-    nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
     nameLabel.Parent = pill
 
-    -- Tag de distância (abaixo do pill)
+    -- Tag de distância — acompanha largura do pill
     local distLabel = Instance_new("TextLabel")
     distLabel.Name = "DistLabel"
     distLabel.Text = "..."
@@ -408,11 +409,12 @@ function TrinketESP:createBillboard(trinket, trinketName)
     distLabel.Font = Config.ESP.FontDist
     distLabel.TextSize = 9
     distLabel.BackgroundTransparency = 1
-    distLabel.Size = UDim2_new(0, 110, 0, 12)
+    distLabel.Size = UDim2_new(1, 0, 0, 12)
+    distLabel.AutomaticSize = Enum.AutomaticSize.None
     distLabel.TextXAlignment = Enum.TextXAlignment.Center
     distLabel.Parent = root
 
-    -- Linha de ancoragem (conecta o pill ao item no chão)
+    -- Linha de ancoragem
     local anchorLine = Instance_new("Frame")
     anchorLine.Name = "AnchorLine"
     anchorLine.BackgroundColor3 = color
