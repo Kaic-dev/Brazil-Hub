@@ -1,9 +1,14 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v8)
+-- Fly.lua (v9)
 --
--- Correções v8:
---   - task.spawn e task.defer substituídos por coroutine.wrap e delay(0)
---     por incompatibilidade do Solara com a task library após atualização
+-- Controles: WASD para direção. W/S seguem o pitch da câmera.
+-- A/D são sempre horizontais. Space soma componente vertical pura.
+-- Velocidade configurável via :setSpeed(n).
+--
+-- Correções v9:
+--   - _attachLock removido: causava imobilidade pois o delay(0) do safeDefer
+--     rodava antes do lock ser liberado, abortando o attach silenciosamente
+--   - Guard de character já protege contra attach duplo sem necessidade de lock
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
@@ -86,7 +91,6 @@ function Fly.new(connectionManager)
 
         _flyConn      = nil,
         _spawnConn    = nil,
-        _attachLock   = false,
     }, Fly)
 end
 
@@ -262,13 +266,8 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_attachToCharacter(character)
-    if self._attachLock then return end
-    self._attachLock = true
-
     local rootPart = character:FindFirstChild("HumanoidRootPart")
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-    self._attachLock = false
 
     if not rootPart or not humanoid then
         safeDefer(function()
