@@ -1,14 +1,9 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v9)
+-- Fly.lua (v10)
 --
--- Controles: WASD para direção. W/S seguem o pitch da câmera.
--- A/D são sempre horizontais. Space soma componente vertical pura.
--- Velocidade configurável via :setSpeed(n).
---
--- Correções v9:
---   - _attachLock removido: causava imobilidade pois o delay(0) do safeDefer
---     rodava antes do lock ser liberado, abortando o attach silenciosamente
---   - Guard de character já protege contra attach duplo sem necessidade de lock
+-- Arquitetura simplificada: um único Heartbeat gerencia tudo.
+-- Sem yields, defers, spawns ou AncestryChanged no caminho crítico.
+-- Compatível com Solara.
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
@@ -81,15 +76,11 @@ function Fly.new(connectionManager)
         _connMgr      = cm,
         _speed        = DEFAULT_SPEED,
         enabled       = false,
-        _destroyed    = false,
 
         _bodyVelocity = nil,
         _bodyGyro     = nil,
-        _character    = nil,
-        _humanoid     = nil,
-        _rootPart     = nil,
 
-        _flyConn      = nil,
+        _heartbeat    = nil,
         _spawnConn    = nil,
     }, Fly)
 end
@@ -111,44 +102,30 @@ local function setPlatformStand(humanoid, state)
     pcall(function() humanoid.PlatformStand = state end)
 end
 
-local function safeSpawn(fn)
-    coroutine.wrap(fn)()
-end
-
-local function safeDefer(fn)
-    delay(0, fn)
+local function getCharacterParts()
+    local player = Players.LocalPlayer
+    if not player then return nil, nil end
+    local char = player.Character
+    if not char then return nil, nil end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not rootPart then return nil, nil end
+    return humanoid, rootPart
 end
 
 --------------------------------------------------------------------------------
 -- Física
 --------------------------------------------------------------------------------
 
-function Fly:_watchPhysicsInstance(instance)
-    instance.AncestryChanged:Connect(function()
-        if self._destroyed then return end
-        if not self.enabled then return end
-        if instance.Parent then return end
-
-        safeDefer(function()
-            if self._destroyed then return end
-            if not self.enabled then return end
-            if not self._rootPart or not self._rootPart.Parent then return end
-            if self._character ~= Players.LocalPlayer.Character then return end
-
-            self:_removePhysics()
-            self:_createPhysics()
-        end)
-    end)
-end
-
-function Fly:_createPhysics()
-    if not self._rootPart then return end
+function Fly:_createPhysics(rootPart)
+    -- limpa anterior antes de criar
+    self:_removePhysics()
 
     local bv = Instance.new("BodyVelocity")
     bv.Name     = "_FlyBV"
     bv.Velocity = V3_ZERO
     bv.MaxForce = MF_FULL
-    bv.Parent   = self._rootPart
+    bv.Parent   = rootPart
     self._bodyVelocity = bv
 
     local bg = Instance.new("BodyGyro")
@@ -156,12 +133,9 @@ function Fly:_createPhysics()
     bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
     bg.P         = GYRO_P
     bg.D         = GYRO_D
-    bg.CFrame    = self._rootPart.CFrame
-    bg.Parent    = self._rootPart
+    bg.CFrame    = rootPart.CFrame
+    bg.Parent    = rootPart
     self._bodyGyro = bg
-
-    self:_watchPhysicsInstance(bv)
-    self:_watchPhysicsInstance(bg)
 end
 
 function Fly:_removePhysics()
@@ -171,26 +145,54 @@ function Fly:_removePhysics()
     self._bodyGyro     = nil
 end
 
+function Fly:_physicsValid(rootPart)
+    local bv = self._bodyVelocity
+    local bg = self._bodyGyro
+    if not bv or not bv.Parent then return false end
+    if not bg or not bg.Parent then return false end
+    if bv.Parent ~= rootPart   then return false end
+    if bg.Parent ~= rootPart   then return false end
+    return true
+end
+
 --------------------------------------------------------------------------------
--- Loop de voo (Heartbeat)
+-- Heartbeat único — gerencia estado + física + movimento
 --------------------------------------------------------------------------------
 
-function Fly:_startLoop()
-    if self._flyConn then
-        pcall(function() self._flyConn:Disconnect() end)
-        self._flyConn = nil
+function Fly:_startHeartbeat()
+    if self._heartbeat then
+        pcall(function() self._heartbeat:Disconnect() end)
+        self._heartbeat = nil
     end
 
-    self._flyConn = RunService.Heartbeat:Connect(function()
+    local lastHumanoid = nil
+
+    self._heartbeat = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
+
+        -- resolve personagem a cada frame (sem cache entre frames)
+        local humanoid, rootPart = getCharacterParts()
+        if not humanoid or not rootPart then return end
+
+        -- PlatformStand: reaplica se o humanoid mudou (respawn)
+        if humanoid ~= lastHumanoid then
+            if lastHumanoid then
+                setPlatformStand(lastHumanoid, false)
+            end
+            setPlatformStand(humanoid, true)
+            lastHumanoid = humanoid
+        end
+
+        -- recria física se inválida (sumiu ou está no rootPart errado)
+        if not self:_physicsValid(rootPart) then
+            self:_createPhysics(rootPart)
+            return -- aguarda próximo frame com física pronta
+        end
 
         local bv = self._bodyVelocity
         local bg = self._bodyGyro
-        local rp = self._rootPart
 
-        if not bv or not bg then return end
-        if not rp or not rp.Parent then return end
-
+        -- câmera
         local cam = workspace.CurrentCamera
         if not cam then return end
 
@@ -205,6 +207,7 @@ function Fly:_startLoop()
             rightH = V3_RIGHT_FALLBACK
         end
 
+        -- input
         local uis      = UserInputService
         local forward  = uis:IsKeyDown(KEY_FORWARD)
         local backward = uis:IsKeyDown(KEY_BACKWARD)
@@ -212,6 +215,7 @@ function Fly:_startLoop()
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
         local up       = uis:IsKeyDown(KEY_UP)
 
+        -- direção: horizontal e vertical separadas
         local hDir = V3_ZERO
         local vAdd = 0
 
@@ -230,22 +234,21 @@ function Fly:_startLoop()
         end
         finalDir = Vector3.new(finalDir.X, pitchV + vAdd, finalDir.Z)
 
-        local velocity
+        -- velocidade
         if finalDir.Magnitude > INPUT_THRESHOLD then
-            velocity    = finalDir.Unit * self._speed
             bv.MaxForce = MF_FULL
+            bv.Velocity = finalDir.Unit * self._speed
         else
-            velocity    = V3_ZERO
             bv.MaxForce = MF_NO_Y
+            bv.Velocity = V3_ZERO
         end
 
-        bv.Velocity = velocity
-
+        -- gyro: só yaw
         local lookH = Vector3.new(look.X, 0, look.Z)
         if lookH.Magnitude > 0.001 then
             lookH = lookH.Unit
         else
-            local rpLook = rp.CFrame.LookVector
+            local rpLook = rootPart.CFrame.LookVector
             lookH = Vector3.new(rpLook.X, 0, rpLook.Z)
             lookH = lookH.Magnitude > 0.001 and lookH.Unit or V3_LOOK_FALLBACK
         end
@@ -254,55 +257,11 @@ function Fly:_startLoop()
     end)
 end
 
-function Fly:_stopLoop()
-    if self._flyConn then
-        pcall(function() self._flyConn:Disconnect() end)
-        self._flyConn = nil
+function Fly:_stopHeartbeat()
+    if self._heartbeat then
+        pcall(function() self._heartbeat:Disconnect() end)
+        self._heartbeat = nil
     end
-end
-
---------------------------------------------------------------------------------
--- Attach / detach
---------------------------------------------------------------------------------
-
-function Fly:_attachToCharacter(character)
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-    if not rootPart or not humanoid then
-        safeDefer(function()
-            if self._destroyed or not self.enabled then return end
-            if Players.LocalPlayer.Character ~= character then return end
-            self:_attachToCharacter(character)
-        end)
-        return
-    end
-
-    if self._destroyed or not self.enabled then return end
-    if Players.LocalPlayer.Character ~= character then return end
-
-    self:_detachFromCharacter()
-
-    self._character = character
-    self._humanoid  = humanoid
-    self._rootPart  = rootPart
-
-    setPlatformStand(humanoid, true)
-    self:_createPhysics()
-    self:_startLoop()
-end
-
-function Fly:_detachFromCharacter()
-    self:_stopLoop()
-    self:_removePhysics()
-
-    if self._humanoid then
-        setPlatformStand(self._humanoid, false)
-    end
-
-    self._character = nil
-    self._humanoid  = nil
-    self._rootPart  = nil
 end
 
 --------------------------------------------------------------------------------
@@ -316,24 +275,19 @@ function Fly:setSpeed(speed)
 end
 
 function Fly:enable()
-    if self.enabled or self._destroyed then return end
+    if self.enabled then return end
     self.enabled = true
+    self:_startHeartbeat()
 
+    -- reconecta PlatformStand ao respawnar
     local player = Players.LocalPlayer
     if not player then return end
 
-    local char = player.Character
-    if char then
-        safeSpawn(function()
-            self:_attachToCharacter(char)
-        end)
-    end
-
-    self._spawnConn = player.CharacterAdded:Connect(function(newChar)
-        if not self.enabled or self._destroyed then return end
-        safeSpawn(function()
-            self:_attachToCharacter(newChar)
-        end)
+    self._spawnConn = player.CharacterAdded:Connect(function()
+        if not self.enabled then return end
+        -- física será recriada automaticamente pelo Heartbeat
+        -- só precisa limpar a física do personagem anterior
+        self:_removePhysics()
     end)
     self._connMgr:add(self._spawnConn)
 end
@@ -342,16 +296,22 @@ function Fly:disable()
     if not self.enabled then return end
     self.enabled = false
 
+    self:_stopHeartbeat()
+    self:_removePhysics()
+
     if self._spawnConn then
         pcall(function() self._spawnConn:Disconnect() end)
         self._spawnConn = nil
     end
 
-    self:_detachFromCharacter()
+    -- restaura PlatformStand
+    local humanoid, _ = getCharacterParts()
+    if humanoid then
+        setPlatformStand(humanoid, false)
+    end
 end
 
 function Fly:destroy()
-    self._destroyed = true
     pcall(function() self:disable() end)
     pcall(function() self._connMgr:disconnectAll() end)
     self._connMgr = nil
