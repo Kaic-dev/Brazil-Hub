@@ -264,29 +264,27 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_attachToCharacter(character)
-    -- lock: impede duas chamadas simultâneas (ex: respawn durante wait)
     if self._attachLock then return end
     self._attachLock = true
 
-    -- WaitForChild nativo com timeout: não bloqueia indefinidamente
-    local rootPart
-    local ok, err = pcall(function()
-        rootPart = character:WaitForChild("HumanoidRootPart", 5)
-    end)
+    -- sem yield: busca sincrona com fallback imediato
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
 
-    -- libera o lock antes de qualquer return
     self._attachLock = false
 
-    -- aborta se falhou, destruído, desabilitado, ou personagem já mudou
-    if not ok or not rootPart then
-        warn("[Fly] WaitForChild falhou:", err)
+    if not rootPart or not humanoid then
+        -- tenta de novo no próximo frame sem yield bloqueante
+        task.defer(function()
+            if self._destroyed or not self.enabled then return end
+            if Players.LocalPlayer.Character ~= character then return end
+            self:_attachToCharacter(character)
+        end)
         return
     end
+
     if self._destroyed or not self.enabled then return end
     if Players.LocalPlayer.Character ~= character then return end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
 
     self:_detachFromCharacter()
 
