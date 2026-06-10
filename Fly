@@ -235,11 +235,12 @@ function Fly:_startHeartbeat()
         finalDir = Vector3.new(finalDir.X, pitchV + vAdd, finalDir.Z)
 
         -- velocidade
+        -- DEPOIS (fix)
         if finalDir.Magnitude > INPUT_THRESHOLD then
             bv.MaxForce = MF_FULL
             bv.Velocity = finalDir.Unit * self._speed
         else
-            bv.MaxForce = MF_NO_Y
+            bv.MaxForce = MF_FULL   -- ← Y também travado, personagem flutua no lugar
             bv.Velocity = V3_ZERO
         end
 
