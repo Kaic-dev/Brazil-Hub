@@ -1,9 +1,7 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v10)
---
--- Arquitetura simplificada: um único Heartbeat gerencia tudo.
--- Sem yields, defers, spawns ou AncestryChanged no caminho crítico.
--- Compatível com Solara.
+-- Fly.lua (v11)
+-- Melhorias: hover estável, tecla de descida, movimento desacoplado da câmera,
+-- aceleração suave, cache de character por respawn, cleanup correto.
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
@@ -39,6 +37,8 @@ local _fallbackCM = {
 --------------------------------------------------------------------------------
 
 local DEFAULT_SPEED   = 60
+local TURBO_MULT      = 2.5          -- multiplicador de velocidade turbo
+local LERP_ALPHA      = 0.18         -- suavidade da aceleração (0 = rígido, 1 = instantâneo)
 local GYRO_MAX_TORQUE = 1e5
 local GYRO_P          = 1e4
 local GYRO_D          = 50
@@ -50,9 +50,10 @@ local KEY_BACKWARD = Enum.KeyCode.S
 local KEY_LEFT     = Enum.KeyCode.A
 local KEY_RIGHT    = Enum.KeyCode.D
 local KEY_UP       = Enum.KeyCode.Space
+local KEY_DOWN     = Enum.KeyCode.LeftControl  -- NOVO: descida
+local KEY_TURBO    = Enum.KeyCode.LeftShift    -- NOVO: turbo
 
 local MF_FULL           = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-local MF_NO_Y           = Vector3.new(BV_MAX_FORCE, 0,            BV_MAX_FORCE)
 local V3_ZERO           = Vector3.zero
 local V3_RIGHT_FALLBACK = Vector3.new(1, 0, 0)
 local V3_LOOK_FALLBACK  = Vector3.new(0, 0, -1)
@@ -77,11 +78,16 @@ function Fly.new(connectionManager)
         _speed        = DEFAULT_SPEED,
         enabled       = false,
 
-        _bodyVelocity = nil,
-        _bodyGyro     = nil,
+        _bodyVelocity  = nil,
+        _bodyGyro      = nil,
+        _heartbeat     = nil,
 
-        _heartbeat    = nil,
-        _spawnConn    = nil,
+        -- cache de character (invalidado no respawn)
+        _cachedHumanoid  = nil,
+        _cachedRootPart  = nil,
+
+        -- velocidade interpolada (lerp)
+        _currentVelocity = Vector3.zero,
     }, Fly)
 end
 
@@ -102,14 +108,26 @@ local function setPlatformStand(humanoid, state)
     pcall(function() humanoid.PlatformStand = state end)
 end
 
-local function getCharacterParts()
+-- Retorna humanoid e rootPart do cache; re-resolve se o cache expirou.
+function Fly:_resolveCharacter()
+    local rp = self._cachedRootPart
+    -- valida cache: rootPart ainda existe e está no workspace
+    if rp and rp.Parent then
+        return self._cachedHumanoid, rp
+    end
+
+    -- cache expirado — re-resolve
     local player = Players.LocalPlayer
     if not player then return nil, nil end
     local char = player.Character
     if not char then return nil, nil end
+
     local humanoid = char:FindFirstChildOfClass("Humanoid")
     local rootPart = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not rootPart then return nil, nil end
+
+    self._cachedHumanoid = humanoid
+    self._cachedRootPart = rootPart
     return humanoid, rootPart
 end
 
@@ -118,7 +136,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_createPhysics(rootPart)
-    -- limpa anterior antes de criar
     self:_removePhysics()
 
     local bv = Instance.new("BodyVelocity")
@@ -148,45 +165,29 @@ end
 function Fly:_physicsValid(rootPart)
     local bv = self._bodyVelocity
     local bg = self._bodyGyro
-    if not bv or not bv.Parent then return false end
-    if not bg or not bg.Parent then return false end
-    if bv.Parent ~= rootPart   then return false end
-    if bg.Parent ~= rootPart   then return false end
-    return true
+    return bv and bv.Parent == rootPart
+       and bg and bg.Parent == rootPart
 end
 
 --------------------------------------------------------------------------------
--- Heartbeat único — gerencia estado + física + movimento
+-- Heartbeat único
 --------------------------------------------------------------------------------
 
 function Fly:_startHeartbeat()
-    if self._heartbeat then
-        pcall(function() self._heartbeat:Disconnect() end)
-        self._heartbeat = nil
-    end
+    self:_stopHeartbeat()
 
-    local lastHumanoid = nil
-
-    self._heartbeat = RunService.Heartbeat:Connect(function()
+    self._heartbeat = RunService.Heartbeat:Connect(function(dt)
         if not self.enabled then return end
 
-        -- resolve personagem a cada frame (sem cache entre frames)
-        local humanoid, rootPart = getCharacterParts()
+        local humanoid, rootPart = self:_resolveCharacter()
         if not humanoid or not rootPart then return end
 
-        -- PlatformStand: reaplica se o humanoid mudou (respawn)
-        if humanoid ~= lastHumanoid then
-            if lastHumanoid then
-                setPlatformStand(lastHumanoid, false)
-            end
-            setPlatformStand(humanoid, true)
-            lastHumanoid = humanoid
-        end
+        setPlatformStand(humanoid, true)
 
-        -- recria física se inválida (sumiu ou está no rootPart errado)
         if not self:_physicsValid(rootPart) then
             self:_createPhysics(rootPart)
-            return -- aguarda próximo frame com física pronta
+            self._currentVelocity = V3_ZERO  -- reset da interpolação ao recriar
+            return
         end
 
         local bv = self._bodyVelocity
@@ -199,6 +200,16 @@ function Fly:_startHeartbeat()
         local camCF    = cam.CFrame
         local look     = camCF.LookVector
         local rightRaw = camCF.RightVector
+
+        -- FIX: direções horizontalizadas — movimento independente do pitch da câmera
+        local lookH = Vector3.new(look.X, 0, look.Z)
+        if lookH.Magnitude > 0.001 then
+            lookH = lookH.Unit
+        else
+            local rpLook = rootPart.CFrame.LookVector
+            lookH = Vector3.new(rpLook.X, 0, rpLook.Z)
+            lookH = lookH.Magnitude > 0.001 and lookH.Unit or V3_LOOK_FALLBACK
+        end
 
         local rightH = Vector3.new(rightRaw.X, 0, rightRaw.Z)
         if rightH.Magnitude > 0.001 then
@@ -214,45 +225,45 @@ function Fly:_startHeartbeat()
         local leftKey  = uis:IsKeyDown(KEY_LEFT)
         local rightKey = uis:IsKeyDown(KEY_RIGHT)
         local up       = uis:IsKeyDown(KEY_UP)
+        local down     = uis:IsKeyDown(KEY_DOWN)   -- NOVO
+        local turbo    = uis:IsKeyDown(KEY_TURBO)  -- NOVO
 
-        -- direção: horizontal e vertical separadas
+        -- construção de direção com eixos completamente separados
         local hDir = V3_ZERO
-        local vAdd = 0
+        local vDir = 0
 
-        if forward  then hDir = hDir + look   end
-        if backward then hDir = hDir - look   end
+        if forward  then hDir = hDir + lookH  end
+        if backward then hDir = hDir - lookH  end
         if rightKey then hDir = hDir + rightH end
         if leftKey  then hDir = hDir - rightH end
-        if up       then vAdd = vAdd + 1       end
+        if up       then vDir = vDir + 1      end
+        if down     then vDir = vDir - 1      end  -- NOVO
 
-        local hFlat  = Vector3.new(hDir.X, 0, hDir.Z)
-        local pitchV = hDir.Y
+        -- normaliza horizontal separadamente para manter velocidade constante em diagonais
+        local hNorm = hDir.Magnitude > 0.001 and hDir.Unit or V3_ZERO
+        local finalDir = Vector3.new(hNorm.X, vDir, hNorm.Z)
 
-        local finalDir = V3_ZERO
-        if hFlat.Magnitude > 0.001 then
-            finalDir = hFlat.Unit
-        end
-        finalDir = Vector3.new(finalDir.X, pitchV + vAdd, finalDir.Z)
+        -- velocidade alvo
+        local speed = self._speed * (turbo and TURBO_MULT or 1)  -- NOVO: turbo
+        local targetVel
 
-        -- velocidade
         if finalDir.Magnitude > INPUT_THRESHOLD then
-            bv.MaxForce = MF_FULL
-            bv.Velocity = finalDir.Unit * self._speed
+            targetVel = finalDir.Unit * speed
         else
-            bv.MaxForce = MF_NO_Y
-            bv.Velocity = V3_ZERO
+            -- HOVER: mantém Y=0 com MaxForce completo para contrapor gravidade
+            targetVel = V3_ZERO
         end
 
-        -- gyro: só yaw
-        local lookH = Vector3.new(look.X, 0, look.Z)
-        if lookH.Magnitude > 0.001 then
-            lookH = lookH.Unit
-        else
-            local rpLook = rootPart.CFrame.LookVector
-            lookH = Vector3.new(rpLook.X, 0, rpLook.Z)
-            lookH = lookH.Magnitude > 0.001 and lookH.Unit or V3_LOOK_FALLBACK
-        end
+        -- NOVO: interpolação suave (lerp por frame) — evita salto brusco de velocidade
+        --       Usa dt para ser frame-rate independent
+        local alpha = 1 - (1 - LERP_ALPHA) ^ (dt * 60)
+        self._currentVelocity = self._currentVelocity:Lerp(targetVel, alpha)
 
+        -- FIX: sempre MaxForce completo para hover estável (contrapõe gravidade no Y)
+        bv.MaxForce = MF_FULL
+        bv.Velocity = self._currentVelocity
+
+        -- gyro: só yaw (horizontal)
         bg.CFrame = CFrame.lookAt(V3_ZERO, lookH)
     end)
 end
@@ -277,19 +288,24 @@ end
 function Fly:enable()
     if self.enabled then return end
     self.enabled = true
-    self:_startHeartbeat()
+    self._currentVelocity = V3_ZERO  -- garante interpolação limpa
 
-    -- reconecta PlatformStand ao respawnar
+    -- FIX: escuta CharacterAdded apenas para invalidar o cache e limpar física
     local player = Players.LocalPlayer
-    if not player then return end
+    if player then
+        local conn
+        conn = player.CharacterAdded:Connect(function()
+            if not self.enabled then return end
+            -- invalida cache — _resolveCharacter irá re-resolver no próximo frame
+            self._cachedHumanoid = nil
+            self._cachedRootPart = nil
+            self:_removePhysics()
+            self._currentVelocity = V3_ZERO
+        end)
+        self._connMgr:add(conn)
+    end
 
-    self._spawnConn = player.CharacterAdded:Connect(function()
-        if not self.enabled then return end
-        -- física será recriada automaticamente pelo Heartbeat
-        -- só precisa limpar a física do personagem anterior
-        self:_removePhysics()
-    end)
-    self._connMgr:add(self._spawnConn)
+    self:_startHeartbeat()
 end
 
 function Fly:disable()
@@ -299,16 +315,15 @@ function Fly:disable()
     self:_stopHeartbeat()
     self:_removePhysics()
 
-    if self._spawnConn then
-        pcall(function() self._spawnConn:Disconnect() end)
-        self._spawnConn = nil
+    -- restaura PlatformStand usando cache (evita re-query)
+    if self._cachedHumanoid and self._cachedHumanoid.Parent then
+        setPlatformStand(self._cachedHumanoid, false)
     end
 
-    -- restaura PlatformStand
-    local humanoid, _ = getCharacterParts()
-    if humanoid then
-        setPlatformStand(humanoid, false)
-    end
+    -- limpa cache
+    self._cachedHumanoid = nil
+    self._cachedRootPart = nil
+    self._currentVelocity = V3_ZERO
 end
 
 function Fly:destroy()
