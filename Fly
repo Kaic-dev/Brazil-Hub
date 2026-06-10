@@ -1,27 +1,26 @@
 --------------------------------------------------------------------------------
--- Fly.lua (v1)
+-- Fly.lua (v2 — anti-remoção de física)
 --
--- Controles: WASD para direção horizontal, Space para subir, LeftShift para
--- descer. Velocidade configurável via :setSpeed(n).
+-- Problema v1: BodyVelocity/BodyGyro eram destruídos pelo servidor (anti-cheat
+-- do Rogue Lineage remove instâncias de física customizadas após alguns
+-- segundos). O loop parava de funcionar mesmo com enabled = true.
 --
--- Implementação:
---   - BodyVelocity no HumanoidRootPart para movimento
---   - BodyGyro para manter o personagem upright (sem tombar)
---   - Humanoid.PlatformStand = true para suprimir animações de andar
---     (com fallback seguro caso o executor não permita)
---   - Reconecta automaticamente se o personagem re-spawnar
+-- Solução v2: o Heartbeat verifica a cada frame se as instâncias ainda existem
+-- e as recria imediatamente se tiverem sido removidas, sem reiniciar o loop.
+-- A _spawnConn também não é mais adicionada ao connMgr global para evitar
+-- que um disconnectAll externo a mate enquanto o Fly está ativo.
 --------------------------------------------------------------------------------
 
 local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
-local pcall_       = pcall
-local type_        = type
-local setmetatable_= setmetatable
+local pcall_        = pcall
+local type_         = type
+local setmetatable_ = setmetatable
 
 --------------------------------------------------------------------------------
--- Fallback ConnectionManager (caso não seja injetado)
+-- Fallback ConnectionManager interno (apenas para contagem/detalhes externos)
 --------------------------------------------------------------------------------
 
 local _fallbackCM = {
@@ -37,6 +36,9 @@ local _fallbackCM = {
                 end
                 conns = {}
             end,
+            count = function()
+                return #conns
+            end,
         }
     end,
 }
@@ -45,9 +47,9 @@ local _fallbackCM = {
 -- Constantes
 --------------------------------------------------------------------------------
 
-local DEFAULT_SPEED    = 60     -- studs/s
-local GYRO_MAX_TORQUE  = 1e5
-local BV_MAX_FORCE     = 1e5
+local DEFAULT_SPEED   = 60
+local GYRO_MAX_TORQUE = 1e5
+local BV_MAX_FORCE    = 1e5
 
 local KEY_FORWARD  = Enum.KeyCode.W
 local KEY_BACKWARD = Enum.KeyCode.S
@@ -57,6 +59,30 @@ local KEY_UP       = Enum.KeyCode.Space
 local KEY_DOWN     = Enum.KeyCode.LeftShift
 
 --------------------------------------------------------------------------------
+-- Helpers
+--------------------------------------------------------------------------------
+
+local function safeDestroy(obj)
+    if obj then pcall_(obj.Destroy, obj) end
+end
+
+local function setPlatformStand(humanoid, state)
+    if not humanoid then return end
+    if type_(sethiddenproperty) == "function" then
+        local ok = pcall_(sethiddenproperty, humanoid, "PlatformStand", state)
+        if ok then return end
+    end
+    pcall_(function() humanoid.PlatformStand = state end)
+end
+
+-- Verifica se uma instância ainda existe e está parentada
+local function isAlive(inst)
+    if not inst then return false end
+    local ok, parent = pcall_(function() return inst.Parent end)
+    return ok and parent ~= nil
+end
+
+--------------------------------------------------------------------------------
 -- Classe Fly
 --------------------------------------------------------------------------------
 
@@ -64,6 +90,9 @@ local Fly   = {}
 Fly.__index = Fly
 
 function Fly.new(connectionManager)
+    -- _connMgr é usado APENAS para expor contagem ao painel de conexões.
+    -- _spawnConn e _flyConn são gerenciados internamente e nunca passados
+    -- para o connMgr global, evitando que disconnectAll externo os mate.
     local cm
     if connectionManager and type_(connectionManager.add) == "function" then
         cm = connectionManager
@@ -72,71 +101,53 @@ function Fly.new(connectionManager)
     end
 
     return setmetatable_({
-        _connMgr        = cm,
-        _speed          = DEFAULT_SPEED,
-        enabled         = false,
+        _connMgr       = cm,
+        _speed         = DEFAULT_SPEED,
+        enabled        = false,
 
-        -- instâncias físicas criadas em _attachToCharacter
-        _bodyVelocity   = nil,
-        _bodyGyro       = nil,
-        _character      = nil,
-        _humanoid       = nil,
-        _rootPart       = nil,
+        _bodyVelocity  = nil,
+        _bodyGyro      = nil,
+        _character     = nil,
+        _humanoid      = nil,
+        _rootPart      = nil,
 
-        -- conexão de loop de voo (desconectada individualmente ao mudar de char)
-        _flyConn        = nil,
-        -- conexão de respawn (vive enquanto o módulo existir)
-        _spawnConn      = nil,
+        _flyConn       = nil,
+        _spawnConn     = nil,
     }, Fly)
 end
 
 --------------------------------------------------------------------------------
--- Helpers
+-- Física: cria instâncias se não existirem / foram removidas
+-- Chamado a cada frame pelo loop — custo mínimo quando já existem.
 --------------------------------------------------------------------------------
 
-local function safeSet(obj, prop, val)
-    pcall_(function() obj[prop] = val end)
-end
+function Fly:_ensurePhysics()
+    if not self._rootPart or not isAlive(self._rootPart) then return end
 
-local function safeDestroy(obj)
-    if obj then pcall_(obj.Destroy, obj) end
-end
-
--- Tenta setar PlatformStand; silencia falha em executores restritos
-local function setPlatformStand(humanoid, state)
-    if not humanoid then return end
-    -- tenta via sethiddenproperty primeiro
-    if type_(sethiddenproperty) == "function" then
-        local ok = pcall_(sethiddenproperty, humanoid, "PlatformStand", state)
-        if ok then return end
+    -- recria BodyVelocity se sumiu
+    if not isAlive(self._bodyVelocity) then
+        safeDestroy(self._bodyVelocity)
+        local bv = Instance.new("BodyVelocity")
+        bv.Name     = "_FlyBV"
+        bv.Velocity = Vector3.zero
+        bv.MaxForce = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
+        pcall_(function() bv.Parent = self._rootPart end)
+        self._bodyVelocity = bv
     end
-    -- fallback direto (pode falhar em alguns executores — ignoramos)
-    safeSet(humanoid, "PlatformStand", state)
-end
 
---------------------------------------------------------------------------------
--- Física: cria/remove BodyVelocity e BodyGyro
---------------------------------------------------------------------------------
-
-function Fly:_createPhysics()
-    if not self._rootPart then return end
-
-    -- BodyVelocity
-    local bv = Instance.new("BodyVelocity")
-    bv.Name        = "_FlyBV"
-    bv.Velocity    = Vector3.zero
-    bv.MaxForce    = Vector3.new(BV_MAX_FORCE, BV_MAX_FORCE, BV_MAX_FORCE)
-    bv.Parent      = self._rootPart
-    self._bodyVelocity = bv
-
-    -- BodyGyro (mantém o personagem upright)
-    local bg = Instance.new("BodyGyro")
-    bg.Name       = "_FlyBG"
-    bg.MaxTorque  = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
-    bg.D          = 100
-    bg.CFrame     = self._rootPart.CFrame
-    bg.Parent     = self._rootPart
-    self._bodyGyro = bg
+    -- recria BodyGyro se sumiu
+    if not isAlive(self._bodyGyro) then
+        safeDestroy(self._bodyGyro)
+        local bg = Instance.new("BodyGyro")
+        bg.Name      = "_FlyBG"
+        bg.MaxTorque = Vector3.new(GYRO_MAX_TORQUE, GYRO_MAX_TORQUE, GYRO_MAX_TORQUE)
+        bg.D         = 100
+        pcall_(function()
+            bg.CFrame = self._rootPart.CFrame
+            bg.Parent = self._rootPart
+        end)
+        self._bodyGyro = bg
+    end
 end
 
 function Fly:_removePhysics()
@@ -151,7 +162,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_startLoop()
-    -- garante que não haja loop duplicado
     if self._flyConn then
         pcall_(function() self._flyConn:Disconnect() end)
         self._flyConn = nil
@@ -159,45 +169,32 @@ function Fly:_startLoop()
 
     self._flyConn = RunService.Heartbeat:Connect(function()
         if not self.enabled then return end
-        if not self._bodyVelocity or not self._bodyGyro then return end
-        if not self._rootPart or not self._rootPart.Parent then return end
+        if not self._rootPart or not isAlive(self._rootPart) then return end
 
-        -- câmera define o eixo de orientação horizontal
-        local cam    = workspace.CurrentCamera
+        -- garante que a física existe (recria se o servidor removeu)
+        self:_ensurePhysics()
+
+        -- sem física válida após tentativa de recriação: aborta este frame
+        if not isAlive(self._bodyVelocity) or not isAlive(self._bodyGyro) then return end
+
+        local cam = workspace.CurrentCamera
         if not cam then return end
-        local look   = cam.CFrame.LookVector
-        local right  = cam.CFrame.RightVector
 
-        -- lê teclas pressionadas
-        local uis = UserInputService
-        local forward  = uis:IsKeyDown(KEY_FORWARD)
-        local backward = uis:IsKeyDown(KEY_BACKWARD)
-        local leftKey  = uis:IsKeyDown(KEY_LEFT)
-        local rightKey = uis:IsKeyDown(KEY_RIGHT)
-        local up       = uis:IsKeyDown(KEY_UP)
-        local down     = uis:IsKeyDown(KEY_DOWN)
+        local look  = cam.CFrame.LookVector
+        local right = cam.CFrame.RightVector
+        local uis   = UserInputService
 
-        -- monta vetor de direção
         local dir = Vector3.zero
+        if uis:IsKeyDown(KEY_FORWARD)  then dir = dir + Vector3.new(look.X,  0, look.Z) end
+        if uis:IsKeyDown(KEY_BACKWARD) then dir = dir - Vector3.new(look.X,  0, look.Z) end
+        if uis:IsKeyDown(KEY_RIGHT)    then dir = dir + Vector3.new(right.X, 0, right.Z) end
+        if uis:IsKeyDown(KEY_LEFT)     then dir = dir - Vector3.new(right.X, 0, right.Z) end
+        if uis:IsKeyDown(KEY_UP)       then dir = dir + Vector3.new(0, 1, 0) end
+        if uis:IsKeyDown(KEY_DOWN)     then dir = dir - Vector3.new(0, 1, 0) end
 
-        if forward  then dir = dir + Vector3.new(look.X,  0, look.Z) end
-        if backward then dir = dir - Vector3.new(look.X,  0, look.Z) end
-        if rightKey then dir = dir + Vector3.new(right.X, 0, right.Z) end
-        if leftKey  then dir = dir - Vector3.new(right.X, 0, right.Z) end
-        if up       then dir = dir + Vector3.new(0, 1, 0) end
-        if down     then dir = dir - Vector3.new(0, 1, 0) end
-
-        -- normaliza somente se houver input (evita NaN em magnitude zero)
-        local velocity
-        if dir.Magnitude > 0.01 then
-            velocity = dir.Unit * self._speed
-        else
-            velocity = Vector3.zero
-        end
+        local velocity = dir.Magnitude > 0.01 and (dir.Unit * self._speed) or Vector3.zero
 
         pcall_(function() self._bodyVelocity.Velocity = velocity end)
-
-        -- gyro acompanha orientação da câmera (sem pitch/roll)
         pcall_(function()
             self._bodyGyro.CFrame = CFrame.new(Vector3.zero, Vector3.new(look.X, 0, look.Z))
         end)
@@ -216,7 +213,6 @@ end
 --------------------------------------------------------------------------------
 
 function Fly:_attachToCharacter(character)
-    -- remove estado anterior primeiro
     self:_detachFromCharacter()
 
     local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -228,7 +224,7 @@ function Fly:_attachToCharacter(character)
     self._rootPart  = rootPart
 
     setPlatformStand(humanoid, true)
-    self:_createPhysics()
+    -- não chama _createPhysics separado: _ensurePhysics no primeiro frame cria tudo
     self:_startLoop()
 end
 
@@ -262,28 +258,24 @@ function Fly:enable()
     local player = Players.LocalPlayer
     if not player then return end
 
-    -- attach ao personagem atual
     local char = player.Character
     if char then
         self:_attachToCharacter(char)
     end
 
-    -- reconecta ao spawnar / re-spawnar
+    -- _spawnConn gerenciada internamente — NÃO passa para connMgr global
+    -- para evitar que disconnectAll externo a desconecte enquanto Fly está ativo
     self._spawnConn = player.CharacterAdded:Connect(function(newChar)
         if not self.enabled then return end
-        -- pequena espera para o personagem carregar completamente
         task.wait(0.2)
         self:_attachToCharacter(newChar)
     end)
-    self._connMgr:add(self._spawnConn)
 end
 
 function Fly:disable()
     if not self.enabled then return end
     self.enabled = false
 
-    -- desconecta CharacterAdded se gerenciado externamente pelo connMgr
-    -- a desconexão individual via _spawnConn garante limpeza imediata
     if self._spawnConn then
         pcall_(function() self._spawnConn:Disconnect() end)
         self._spawnConn = nil
@@ -294,7 +286,6 @@ end
 
 function Fly:destroy()
     pcall_(function() self:disable() end)
-    pcall_(function() self._connMgr:disconnectAll() end)
     self._connMgr = nil
 end
 
