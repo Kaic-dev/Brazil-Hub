@@ -745,32 +745,35 @@ local function createCombatTab(combatTab, fovManager)
     })
 
     -- [C] Opções de Auto-Aim no ConfigPanel
-    aaToggle:ConfigPanel(function(panel)
-        panel:AddSection("FOV")
-        panel:AddSlider("FOV (graus)", 5, 90, CONFIG.AUTO_AIM.DEFAULT_FOV, 0,
-            UICallbacks.onAutoAimFOVChanged)
+    local cpOk, cpErr = pcall(function()
+        aaToggle:ConfigPanel(function(panel)
+            panel:AddSection("FOV")
+            panel:AddSlider("FOV (graus)", 5, 90, CONFIG.AUTO_AIM.DEFAULT_FOV, 0,
+                UICallbacks.onAutoAimFOVChanged)
 
-        panel:AddSection("Posicionamento")
-        panel:AddSlider("Studs Behind Min", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 0,
-            UICallbacks.onStudsBehindMinChanged)
-        panel:AddSlider("Studs Behind Max", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max, 0,
-            UICallbacks.onStudsBehindMaxChanged)
+            panel:AddSection("Posicionamento")
+            panel:AddSlider("Studs Behind Min", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 0,
+                UICallbacks.onStudsBehindMinChanged)
+            panel:AddSlider("Studs Behind Max", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max, 0,
+                UICallbacks.onStudsBehindMaxChanged)
 
-        panel:AddSection("Ferramentas")
-        panel:AddDropdown("Tools", CONFIG.AUTO_AIM.AVAILABLE_TOOLS, true,
-            CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
-            function(selected)
-                local clean = {}
-                for name, state in pairs(selected) do
-                    if state then
-                        clean[#clean+1] = name
-                            :gsub(" %[Equipped%]$", "")
-                            :gsub(" %[Backpack%]$", "")
+            panel:AddSection("Ferramentas")
+            panel:AddDropdown("Tools", CONFIG.AUTO_AIM.AVAILABLE_TOOLS, true,
+                CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+                function(selected)
+                    local clean = {}
+                    for name, state in pairs(selected) do
+                        if state then
+                            clean[#clean+1] = name
+                                :gsub(" %[Equipped%]$", "")
+                                :gsub(" %[Backpack%]$", "")
+                        end
                     end
-                end
-                UICallbacks.onAutoAimToolsChanged(clean)
-            end)
+                    UICallbacks.onAutoAimToolsChanged(clean)
+                end)
+        end)
     end)
+    if not cpOk then warn("[BrazilHub] AutoAim ConfigPanel erro:", tostring(cpErr)) end
 
     autoAimGroup:AddLabel("FOV Circle Color"):AddColorPicker("FOVCircleColor", {
         Default  = CONFIG.FOV_CIRCLE.DEFAULT_COLOR,
@@ -831,23 +834,26 @@ local function createCombatTab(combatTab, fovManager)
             end
         end
 
-        abToggle:ConfigPanel(function(panel)
-            panel:AddSection("Skills")
-            panel:AddDropdown("Skills", skillOptions, true, skillOptions,
-                function(sel) applyThreatDropdown(skillOptions, sel) end)
+        local cpOk2, cpErr2 = pcall(function()
+            abToggle:ConfigPanel(function(panel)
+                panel:AddSection("Skills")
+                panel:AddDropdown("Skills", skillOptions, true, skillOptions,
+                    function(sel) applyThreatDropdown(skillOptions, sel) end)
 
-            panel:AddSection("Attack Types")
-            panel:AddDropdown("Attack Types", attackOptions, true, attackOptions,
-                function(sel) applyThreatDropdown(attackOptions, sel) end)
+                panel:AddSection("Attack Types")
+                panel:AddDropdown("Attack Types", attackOptions, true, attackOptions,
+                    function(sel) applyThreatDropdown(attackOptions, sel) end)
 
-            panel:AddSection("Block Distance")
-            for threatId, cfg in pairs(allThreats) do
-                panel:AddSlider(cfg.name, 5, 300, cfg.blockDistance or 50, 0,
-                    function(v)
-                        ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
-                    end)
-            end
+                panel:AddSection("Block Distance")
+                for threatId, cfg in pairs(allThreats) do
+                    panel:AddSlider(cfg.name, 5, 300, cfg.blockDistance or 50, 0,
+                        function(v)
+                            ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
+                        end)
+                end
+            end)
         end)
+        if not cpOk2 then warn("[BrazilHub] AutoBlock ConfigPanel erro:", tostring(cpErr2)) end
     end
 end
 
@@ -866,26 +872,30 @@ local function createVisualsTab(visualsTab)
     if espToggle and espToggle.Value then UICallbacks.onTogglePlayerESP(true) end
 
     -- [C] Opções visuais do ESP no ConfigPanel
-    espToggle:ConfigPanel(function(panel)
-        panel:AddSection("Texto")
-        panel:AddSlider("Text Size", 7, 40, CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE, 0,
-            UICallbacks.onPlayerESPTextSizeChanged)
-        panel:AddColorPicker("Text Color", CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
-            UICallbacks.onPlayerESPTextColorChanged)
+    local cpEspOk, cpEspErr = pcall(function()
+        espToggle:ConfigPanel(function(panel)
+            panel:AddSection("Texto")
+            panel:AddSlider("Text Size", 7, 40, CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE, 0,
+                UICallbacks.onPlayerESPTextSizeChanged)
+            panel:AddColorPicker("Text Color", CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
+                UICallbacks.onPlayerESPTextColorChanged)
 
-        if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
-            panel:AddSection("Campos")
-            for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
-                local labelText  = configKey:gsub("show", ""):gsub("^%l", string.upper)
-                panel:AddToggle(labelText, defaultValue, function(val)
-                    ModuleInstances.playerEsp.displayConfig[configKey] = val
-                    if ModuleInstances.playerEsp.setDisplayConfig then
-                        ModuleInstances.playerEsp:setDisplayConfig()
-                    end
-                end)
+            if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
+                panel:AddSection("Campos")
+                for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
+                    local labelText = configKey:gsub("show", ""):gsub("^%l", string.upper)
+                    -- panelAPI:AddToggle usa (labelText, default, cb) — sem id separado
+                    panel:AddToggle(labelText, defaultValue == true, function(val)
+                        ModuleInstances.playerEsp.displayConfig[configKey] = val
+                        if ModuleInstances.playerEsp.setDisplayConfig then
+                            ModuleInstances.playerEsp:setDisplayConfig()
+                        end
+                    end)
+                end
             end
-        end
+        end)
     end)
+    if not cpEspOk then warn("[BrazilHub] PlayerESP ConfigPanel erro:", tostring(cpEspErr)) end
 
     if ModuleInstances.playerEsp then
         ModuleInstances.playerEsp:setTextSize(CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE)
@@ -941,15 +951,18 @@ local function createVisualsTab(visualsTab)
     if ffToggle and ffToggle.Value then UICallbacks.onToggleFFDetector(true) end
 
     -- [C] Opções do FF Detector no ConfigPanel
-    ffToggle:ConfigPanel(function(panel)
-        panel:AddSection("Billboard")
-        panel:AddSlider("Max Distance", 10, 300,
-            CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE, 0,
-            UICallbacks.onBillboardDistanceChanged)
-        panel:AddSlider("Text Size", 7, 40,
-            CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE, 0,
-            UICallbacks.onBillboardTextSizeChanged)
+    local cpFfOk, cpFfErr = pcall(function()
+        ffToggle:ConfigPanel(function(panel)
+            panel:AddSection("Billboard")
+            panel:AddSlider("Max Distance", 10, 300,
+                CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE, 0,
+                UICallbacks.onBillboardDistanceChanged)
+            panel:AddSlider("Text Size", 7, 40,
+                CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE, 0,
+                UICallbacks.onBillboardTextSizeChanged)
+        end)
     end)
+    if not cpFfOk then warn("[BrazilHub] FFDetector ConfigPanel erro:", tostring(cpFfErr)) end
 
     -- ── Other ─────────────────────────────────────────────────────────────────
     local otherGroup = visualsTab:AddRightGroupbox("Other")
@@ -973,13 +986,16 @@ local function createMiscTab(miscTab)
     })
 
     -- [C] Speed do Fly no ConfigPanel
-    flyToggle:ConfigPanel(function(panel)
-        panel:AddSection("Velocidade")
-        panel:AddLabel("WASD = direção  |  Space = subir  |  LShift = descer")
-        panel:AddSlider("Speed", CONFIG.FLY.MIN_SPEED, CONFIG.FLY.MAX_SPEED,
-            CONFIG.FLY.DEFAULT_SPEED, 0,
-            UICallbacks.onFlySpeedChanged)
+    local cpFlyOk, cpFlyErr = pcall(function()
+        flyToggle:ConfigPanel(function(panel)
+            panel:AddSection("Velocidade")
+            panel:AddLabel("WASD = direção  |  Space = subir  |  LShift = descer")
+            panel:AddSlider("Speed", CONFIG.FLY.MIN_SPEED, CONFIG.FLY.MAX_SPEED,
+                CONFIG.FLY.DEFAULT_SPEED, 0,
+                UICallbacks.onFlySpeedChanged)
+        end)
     end)
+    if not cpFlyOk then warn("[BrazilHub] Fly ConfigPanel erro:", tostring(cpFlyErr)) end
 
     -- ── Triggers ──────────────────────────────────────────────────────────────
     local triggersGroup = miscTab:AddLeftGroupbox("Triggers")
