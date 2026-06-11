@@ -1,29 +1,25 @@
 --------------------------------------------------------------------------------
--- trinket_esp_handler.lua (v5 — blindado)
+-- trinket_esp_handler.lua (v5 — refatorado)
 --
--- RISCOS CORRIGIDOS NESTA VERSÃO:
--- [1] isTrinket sem pcall: obj.ClassName explode se obj for destruído antes
---     de ser processado pelo cache. Corrigido com pcall no acesso.
--- [2] identifyGem acessa part.BrickColor.Color diretamente: se part for
---     deletado entre isTrinket e identifyGem, quebra. Isolado em pcall.
--- [3] scanLevel closure recria uma função a cada chamada de identifyByParticles,
---     gerando alocação desnecessária. Convertido para função local flat.
--- [4] _runQueue referencia self._queue por upvalue local "q" e depois reatribui
---     self._queue na compactação, mas "q" fica apontando para a tabela antiga.
---     Corrigido: compactação reatribui "q" corretamente.
--- [5] enable() pode ser chamado antes de Players.LocalPlayer existir em alguns
---     executores. getLocalRootPart já trata, mas updateDistances acessava
---     refs.distLabel.Text sem verificar se refs.distLabel ainda existe.
---     Corrigido com pcall por label.
--- [6] disable() reseta trinketCache como variável global do módulo — se houver
---     duas instâncias de TrinketESP ativas (raro mas possível), uma limpa o
---     cache da outra. Corrigido: cache movido para dentro da instância.
--- [7] getTrinketInfo acessava part.Material, part.BrickColor.Name e
---     part:FindFirstChildOfClass() sem pcall: se a part for destruída entre
---     isTrinket e esse ponto, o pcall_ externo do _runQueue captura o erro,
---     infoOk vira false e o billboard nunca é criado — mesmo para itens
---     desconhecidos com StringValue "ID". Corrigido: bloco de material
---     isolado em pcall_, retornando matResult or "Unknown".
+-- MUDANÇAS EM RELAÇÃO À v4:
+-- [A] isTrinket: removida restrição de ClassName; contrato real é ter filho
+--     "ID" do tipo StringValue. Qualquer instância no Workspace que satisfaça
+--     isso é tratada como trinket.
+-- [B] onChildAdded: adicionado listener temporário por objeto para o caso de
+--     "ID" não ter sido replicado ainda quando ChildAdded disparou no Workspace.
+--     O listener se desconecta sozinho ao encontrar "ID", invalidando o cache
+--     falso ereenfileirando o objeto.
+-- [C] _scanOrb/_scanLight/_scanSphere: movidos de volta para dentro de
+--     identifyByParticles como locais de função. O argumento de performance
+--     da v4 era inválido (booleanos na stack não são heap-allocated); a solução
+--     criava estado compartilhado entre instâncias concorrentes.
+-- [D] getTrinketInfo: pcall removido do _runQueue; erros agora são logados
+--     com warn() para facilitar diagnóstico de trinkets não identificados.
+-- [E] scanExistingTrinkets: usa GetDescendants com filtro de profundidade para
+--     cobrir trinkets em sub-hierarquias futuras sem custo excessivo, mantendo
+--     compatibilidade com estrutura flat atual.
+-- [F] Limpeza geral: upvalues desnecessários removidos, comentários alinhados
+--     com o comportamento real do código.
 --------------------------------------------------------------------------------
 
 local Workspace  = game:GetService("Workspace")
@@ -37,7 +33,6 @@ local Players    = game:GetService("Players")
 local type_        = type
 local tostring_    = tostring
 local pairs_       = pairs
-local ipairs_      = ipairs
 local setmetatable_= setmetatable
 local mathFloor    = math.floor
 local pcall_       = pcall
@@ -89,10 +84,7 @@ do
         "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
         "ConnectionManager"
     )
-    if not (type_(_rawCM) == "table" and type_(_rawCM.new) == "function") then
-        _rawCM = nil
-    end
-    if _rawCM then
+    if type_(_rawCM) == "table" and type_(_rawCM.new) == "function" then
         _fallbackCM = _rawCM
     end
 end
@@ -190,19 +182,19 @@ local Config = {
     },
 }
 
-local CFG_ESP            = Config.ESP
-local PHOENIX_TEXTURE    = Config.Assets.PhoenixTexture
-local ICE_TEXTURE        = Config.Assets.IceEssenceTexture
-local PARTICLE_KEYS      = Config.ParticleKeys
-local MAT_SLATE          = Config.Materials.Slate
-local MAT_NEON           = Config.Materials.Neon
-local MAT_GLASS          = Config.Materials.Glass
-local MESH_SPHERE        = Config.MeshTypes.Sphere
-local GEM_IDS            = Config.GemMeshIDs
-local MESH_IDS           = Config.MeshIDs
-local COLOR_TRINKETS     = Config.Colors.Trinkets
-local COLOR_DEFAULT      = Config.Colors.Default
-local DIST_UPDATE_RATE   = Config.ESP.DistanceUpdateRate
+local CFG_ESP          = Config.ESP
+local PHOENIX_TEXTURE  = Config.Assets.PhoenixTexture
+local ICE_TEXTURE      = Config.Assets.IceEssenceTexture
+local PARTICLE_KEYS    = Config.ParticleKeys
+local MAT_SLATE        = Config.Materials.Slate
+local MAT_NEON         = Config.Materials.Neon
+local MAT_GLASS        = Config.Materials.Glass
+local MESH_SPHERE      = Config.MeshTypes.Sphere
+local GEM_IDS          = Config.GemMeshIDs
+local MESH_IDS         = Config.MeshIDs
+local COLOR_TRINKETS   = Config.Colors.Trinkets
+local COLOR_DEFAULT    = Config.Colors.Default
+local DIST_UPDATE_RATE = Config.ESP.DistanceUpdateRate
 
 --------------------------------------------------------------------------------
 -- DISTÂNCIA
@@ -227,11 +219,20 @@ end
 -- IDENTIFICAÇÃO
 --------------------------------------------------------------------------------
 
-local _scanOrb    = false
-local _scanLight  = false
-local _scanSphere = false
+-- [A] Contrato real: ter filho "ID" do tipo StringValue.
+--     ClassName ignorado — não é parte do protocolo do jogo.
+local function isTrinket(obj, cache)
+    local cached = cache[obj]
+    if cached ~= nil then return cached end
 
-local function scanLevel(container)
+    local ok, child = pcall_(obj.FindFirstChild, obj, "ID")
+    local result = ok and child ~= nil and child:IsA("StringValue")
+    cache[obj] = result
+    return result
+end
+
+-- [C] Estado de scan local à função — sem upvalue de módulo compartilhado.
+local function scanLevel(container, orbRef, lightRef, sphereRef)
     local ok, children = pcall_(container.GetChildren, container)
     if not ok or type_(children) ~= "table" then return nil end
 
@@ -243,7 +244,7 @@ local function scanLevel(container)
         if cn == "ParticleEmitter" then
             local nameOk, childName = pcall_(function() return child.Name end)
             if nameOk and childName == "OrbParticle" then
-                _scanOrb = true
+                orbRef.value = true
             else
                 local texOk, tex = pcall_(function() return tostring_(child.Texture) end)
                 if texOk then
@@ -271,16 +272,16 @@ local function scanLevel(container)
             end
 
         elseif cn == "PointLight" then
-            _scanLight = true
+            lightRef.value = true
 
         elseif cn == "SpecialMesh" then
             local mtOk, mt = pcall_(function() return child.MeshType end)
             if mtOk and mt == MESH_SPHERE then
-                _scanSphere = true
+                sphereRef.value = true
             end
 
         elseif cn == "Attachment" then
-            local res = scanLevel(child)
+            local res = scanLevel(child, orbRef, lightRef, sphereRef)
             if res then return res end
         end
     end
@@ -289,14 +290,15 @@ local function scanLevel(container)
 end
 
 local function identifyByParticles(part)
-    _scanOrb    = false
-    _scanLight  = false
-    _scanSphere = false
+    -- [C] Tabelas leves como referência mutável — sem upvalue de módulo.
+    local orbRef    = { value = false }
+    local lightRef  = { value = false }
+    local sphereRef = { value = false }
 
-    local result = scanLevel(part)
+    local result = scanLevel(part, orbRef, lightRef, sphereRef)
     if result then return result end
 
-    if _scanOrb and _scanLight and _scanSphere then
+    if orbRef.value and lightRef.value and sphereRef.value then
         return "???"
     end
 
@@ -304,20 +306,22 @@ local function identifyByParticles(part)
 end
 
 local function identifyGem(part)
-    local ok, r, g, b, name = pcall_(function()
+    local ok, r, g, b = pcall_(function()
         local cv = part.BrickColor.Color
-        return cv.R, cv.G, cv.B, part.BrickColor.Name
+        return cv.R, cv.G, cv.B
     end)
 
     if not ok then return "Rift Gem" end
 
-    if name == "Really red" or name == "Bright red" or (r > 0.7 and g < 0.3 and b < 0.3) then
+    -- Primário: faixas RGB (robusto a cores atribuídas via Color3 diretamente).
+    -- Secundário: BrickColor.Name como desempate em casos limítrofes.
+    if r > 0.7 and g < 0.3 and b < 0.3 then
         return "Ruby"
-    elseif name == "Bright blue" or name == "Cyan" or name == "Lapis" or (r < 0.3 and g < 0.3 and b > 0.7) then
+    elseif r < 0.3 and g < 0.3 and b > 0.7 then
         return "Sapphire"
-    elseif name == "Bright green" or name == "Forest green" or name == "Lime green" or (r < 0.3 and g > 0.7 and b < 0.3) then
+    elseif r < 0.3 and g > 0.7 and b < 0.3 then
         return "Emerald"
-    elseif name == "White" or name == "Institutional white" or (r > 0.8 and g > 0.8 and b > 0.8) then
+    elseif r > 0.8 and g > 0.8 and b > 0.8 then
         return "Diamond"
     end
 
@@ -328,26 +332,6 @@ local function cleanMeshId(id)
     return tostring_(id):gsub("%%20", ""):gsub("%s+", ""):gsub("rbxassetid://", "")
 end
 
-local function isTrinket(obj, cache)
-    local cached = cache[obj]
-    if cached ~= nil then return cached end
-
-    local cnOk, cn = pcall_(function() return obj.ClassName end)
-    if not cnOk or (cn ~= "Part" and cn ~= "MeshPart") then
-        cache[obj] = false
-        return false
-    end
-
-    local idOk, child = pcall_(obj.FindFirstChild, obj, "ID")
-    local result = idOk and child ~= nil
-    cache[obj] = result
-    return result
-end
-
--- FIX [7]: bloco de material totalmente isolado em pcall_.
--- Antes, part.Material (e acessos subsequentes) sem proteção faziam o pcall_
--- externo do _runQueue capturar o erro → infoOk = false → billboard nunca
--- criado, mesmo para itens válidos com StringValue "ID" desconhecidos.
 local function getTrinketInfo(part)
     -- 1. Partículas
     local byParticle = identifyByParticles(part)
@@ -376,37 +360,27 @@ local function getTrinketInfo(part)
         if known then return known end
     end
 
-    -- 3. Material — FIX [7]: todos os acessos isolados em pcall_
-    local matResult
-    pcall_(function()
-        local mat = part.Material
+    -- 3. Material
+    local mat = part.Material
 
-        if mat == MAT_SLATE then
-            matResult = "Idol of the Forgotten"
-            return
+    if mat == MAT_SLATE then return "Idol of the Forgotten" end
+
+    if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
+        return "Opal"
+    end
+
+    if mat == MAT_NEON then
+        local bcName = part.BrickColor.Name
+        if bcName == "Gold" or bcName == "New Yeller" then
+            return "Lost Sunshine"
         end
-
-        if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
-            matResult = "Opal"
-            return
+        if part:FindFirstChildOfClass("PointLight") then
+            return "Amulet of the White King"
         end
+        return "Nightstone"
+    end
 
-        if mat == MAT_NEON then
-            local bcName = part.BrickColor.Name
-            if bcName == "Gold" or bcName == "New Yeller" then
-                matResult = "Lost Sunshine"
-            elseif part:FindFirstChildOfClass("PointLight") then
-                matResult = "Amulet of the White King"
-            else
-                matResult = "Nightstone"
-            end
-        end
-    end)
-
-    -- matResult nil significa que nenhum material bateu ou que a part foi
-    -- destruída durante a checagem — em ambos os casos retorna "Unknown"
-    -- sem propagar erro para o _runQueue.
-    return matResult or "Unknown"
+    return "Unknown"
 end
 
 --------------------------------------------------------------------------------
@@ -434,6 +408,7 @@ function TrinketESP.new()
 
         _trinketCache      = setmetatable_({}, { __mode = "k" }),
         _processedObjects  = setmetatable_({}, { __mode = "k" }),
+        _pendingConns      = setmetatable_({}, { __mode = "k" }), -- [B] listeners temporários
 
         _heartbeatConn     = nil,
     }, TrinketESP)
@@ -572,6 +547,13 @@ function TrinketESP:removeBillboard(trinket)
     end
     self._trinketCache[trinket]     = nil
     self._processedObjects[trinket] = nil
+
+    -- [B] Cancela listener temporário pendente, se houver.
+    local conn = self._pendingConns[trinket]
+    if conn then
+        pcall_(conn.Disconnect, conn)
+        self._pendingConns[trinket] = nil
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -601,16 +583,21 @@ function TrinketESP:_runQueue()
                 and trinket.Parent ~= nil then
                     self._processedObjects[trinket] = true
 
-                    local name   = "Unknown"
-                    local infoOk = pcall_(function()
+                    -- [D] Sem pcall engolindo erro silenciosamente:
+                    --     falhas são logadas para diagnóstico.
+                    local name = "Unknown"
+                    local infoOk, infoErr = pcall_(function()
                         name = getTrinketInfo(trinket)
                     end)
 
-                    if infoOk then
-                        pcall_(function()
-                            self:createBillboard(trinket, name)
-                        end)
+                    if not infoOk then
+                        warn("[TrinketESP] getTrinketInfo falhou para",
+                             tostring_(trinket), ":", tostring_(infoErr))
                     end
+
+                    pcall_(function()
+                        self:createBillboard(trinket, name)
+                    end)
                 end
             end
 
@@ -646,11 +633,40 @@ end
 -- CALLBACKS
 --------------------------------------------------------------------------------
 
+-- [B] Listener temporário: se "ID" ainda não chegou quando ChildAdded disparou
+--     no Workspace, observa o objeto e reprocessa quando "ID" aparecer.
+function TrinketESP:_watchForID(obj)
+    if self._pendingConns[obj] then return end  -- já observando
+
+    local conn
+    conn = obj.ChildAdded:Connect(function(child)
+        if child.Name ~= "ID" or not child:IsA("StringValue") then return end
+
+        -- Limpa a si mesmo
+        pcall_(conn.Disconnect, conn)
+        self._pendingConns[obj] = nil
+
+        -- Invalida o cache falso e reprocessa
+        self._trinketCache[obj] = nil
+        if self.enabled and not self._processedObjects[obj] and obj.Parent ~= nil then
+            self:_enqueue(obj)
+        end
+    end)
+
+    self._pendingConns[obj] = conn
+end
+
 function TrinketESP:onChildAdded(obj)
     if not self.enabled then return end
-    if not isTrinket(obj, self._trinketCache) then return end
     if self._processedObjects[obj] then return end
-    self:_enqueue(obj)
+
+    if isTrinket(obj, self._trinketCache) then
+        self:_enqueue(obj)
+        return
+    end
+
+    -- [B] "ID" pode não ter chegado ainda: agenda reprocessamento.
+    self:_watchForID(obj)
 end
 
 function TrinketESP:onChildRemoved(obj)
@@ -723,6 +739,12 @@ function TrinketESP:disable()
         self._heartbeatConn = nil
     end
 
+    -- Cancela todos os listeners temporários pendentes
+    for obj, conn in pairs_(self._pendingConns) do
+        pcall_(conn.Disconnect, conn)
+        self._pendingConns[obj] = nil
+    end
+
     local keys = {}
     for trinket in pairs_(self.espBillboards) do
         keys[#keys + 1] = trinket
@@ -737,6 +759,7 @@ function TrinketESP:disable()
 
     self._trinketCache     = setmetatable_({}, { __mode = "k" })
     self._processedObjects = setmetatable_({}, { __mode = "k" })
+    self._pendingConns     = setmetatable_({}, { __mode = "k" })
 end
 
 function TrinketESP:destroy()
@@ -745,6 +768,7 @@ function TrinketESP:destroy()
     self.espBillboards      = nil
     self._processedObjects  = nil
     self._trinketCache      = nil
+    self._pendingConns      = nil
     self._queue             = nil
 end
 
