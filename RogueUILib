@@ -242,25 +242,19 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     phClose.MouseButton1Click:Connect(closePanel)
 
-    local GuiService = game:GetService("GuiService")
-
     if addCleanup then
         addCleanup(UserInputService.InputBegan:Connect(function(input)
             if not open then return end
             if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
-            -- Checa imediatamente (sem task.defer) se o clique foi dentro do painel
-            -- Usa GetGuiObjectsAtPosition para detectar qualquer filho do painel
             local mp = UserInputService:GetMouseLocation()
-            local objects = GuiService:GetGuiObjectsAtPosition(mp.X, mp.Y)
-            for _, obj in ipairs(objects) do
-                local cur = obj
-                while cur do
-                    if cur == panel then return end  -- clique foi dentro do painel
-                    cur = cur.Parent
-                end
-            end
+            -- Hit-test manual: verifica se o clique foi dentro do painel
+            local pp = panel.AbsolutePosition
+            local ps = panel.AbsoluteSize
+            local inPanel = mp.X >= pp.X and mp.X <= pp.X + ps.X
+                        and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y
+            if inPanel then return end
             -- Verifica anchorFrame (gear btn)
             local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
             local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
