@@ -192,7 +192,8 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     contentPad.PaddingBottom = UDim.new(0,6)
     contentPad.Parent        = scroll
 
-    local open = false
+    local open          = false
+    local sliderDragging = false  -- impede fechamento ao arrastar sliders
 
     local function recalc()
         local h = layout.AbsoluteContentSize.Y + 16
@@ -247,7 +248,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             task.defer(function()
-                if not open then return end
+                if not open or sliderDragging then return end
                 local mp = UserInputService:GetMouseLocation()
                 local pp = panel.AbsolutePosition; local ps = panel.AbsoluteSize
                 local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
@@ -466,12 +467,14 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         track.InputBegan:Connect(function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1
             or input.UserInputType==Enum.UserInputType.Touch then
-                dragging=true; updateDrag(input); playClick()
+                dragging=true; sliderDragging=true; updateDrag(input); playClick()
             end
         end)
         addCleanup(UserInputService.InputEnded:Connect(function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1
-            or input.UserInputType==Enum.UserInputType.Touch then dragging=false end
+            or input.UserInputType==Enum.UserInputType.Touch then
+                dragging=false; sliderDragging=false
+            end
         end))
         addCleanup(UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement
@@ -897,6 +900,7 @@ function RogueUI:CreateWindow(options)
         ActiveTab          = nil,
         ToggleKeybind      = { Value = toggleKey },
         CleanupConnections = {},
+        _activeDropdown    = nil,  -- dropdown do groupbox atualmente aberto
     }
 
     local function addCleanup(conn)
@@ -1659,6 +1663,9 @@ function RogueUI:CreateWindow(options)
                     open=false; menu.Visible=false
                     bStroke.Color=RogueUI.Theme.BorderInactive
                     if posConn then posConn:Disconnect(); posConn=nil end
+                    if self_Window._activeDropdown == closeMenu then
+                        self_Window._activeDropdown = nil
+                    end
                 end
 
                 addCleanup(UserInputService.InputBegan:Connect(function(input)
@@ -1676,6 +1683,26 @@ function RogueUI:CreateWindow(options)
                     end)
                 end))
                 addCleanup(closeMenu)
+
+                local function openMenu()
+                    -- Fecha outro dropdown que estiver aberto
+                    if self_Window._activeDropdown and self_Window._activeDropdown ~= closeMenu then
+                        self_Window._activeDropdown()
+                    end
+                    open=true; self_Window._activeDropdown = closeMenu
+                    posMenu(); menu.Visible=true
+                    bStroke.Color=RogueUI.Theme.BorderColor
+                    posConn=RunService.Heartbeat:Connect(posMenu)
+                    playClick()
+                end
+
+                btn.MouseButton1Click:Connect(function()
+                    if open then
+                        closeMenu(); playClick()
+                    else
+                        openMenu()
+                    end
+                end)
 
                 local function populateMenu()
                     for _,c in ipairs(mScroll:GetChildren()) do
@@ -1714,15 +1741,6 @@ function RogueUI:CreateWindow(options)
                     end
                 end
                 populateMenu()
-
-                btn.MouseButton1Click:Connect(function()
-                    open=not open
-                    if open then posMenu(); posConn=RunService.Heartbeat:Connect(posMenu)
-                    else if posConn then posConn:Disconnect(); posConn=nil end end
-                    menu.Visible=open
-                    bStroke.Color=open and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
-                    playClick()
-                end)
 
                 local panelInst = nil
 
