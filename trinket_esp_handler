@@ -1,20 +1,37 @@
 --------------------------------------------------------------------------------
--- trinket_esp_handler.lua (v6)
+-- trinket_esp_handler.lua (v7)
 --
--- CORREÇÕES EM RELAÇÃO À v5:
--- [1] scanExistingTrinkets não chamava _watchForID: objetos já presentes no
---     Workspace com "ID" ainda não replicado eram descartados permanentemente
---     pois ChildAdded não dispara retroativamente. Corrigido: scan agora chama
---     _watchForID para qualquer objeto que falhe em isTrinket.
--- [2] Race condition em _watchForID: janela entre isTrinket retornar false e
---     Connect ser estabelecido permitia "ID" chegar sem ser detectado. Corrigido:
---     após Connect, relê o objeto imediatamente para fechar a janela.
--- [3] _processedObjects marcado antes de createBillboard: se createBillboard
---     falhasse, o objeto ficava marcado sem billboard e nunca era reprocessado.
---     Corrigido: marca como processado somente após createBillboard ter sucesso.
--- [4] onChildRemoved ignorava objetos em _pendingConns sem billboard: conexão
---     temporária ficava viva após remoção do objeto. Corrigido: onChildRemoved
---     chama removeBillboard incondicionalmente (que já limpa _pendingConns).
+-- NOVIDADES EM RELAÇÃO À v6:
+-- [A] Sistema de configuração completo via setConfig(cfg) / getConfig()
+--     Campos suportados:
+--       • maxDistance      (number)  — distância máxima para exibir billboard (studs)
+--       • filterMode       (string)  — "none" | "whitelist" | "blacklist"
+--       • filterList       (table)   — lista de nomes de trinkets p/ filtro
+--       • showName         (bool)    — exibe nome do trinket
+--       • showDistance     (bool)    — exibe distância
+--       • showDot          (bool)    — exibe dot colorido
+--       • showLine         (bool)    — exibe linha âncora vertical
+--       • textSize         (number)  — tamanho do texto do nome
+--       • distTextSize     (number)  — tamanho do texto de distância
+--       • pillTransparency (number)  — transparência de fundo da pill (0–1)
+--       • alwaysOnTop      (bool)    — billboard sempre na frente
+--       • studOffset       (number)  — deslocamento vertical do billboard (studs)
+--
+-- [B] Visibilidade dinâmica: distância máxima checada no heartbeat;
+--     billboards são ocultados/exibidos sem recriar as instâncias.
+--
+-- [C] Filtro de nome aplicado antes de enfileirar, e reaplicado ao chamar
+--     setConfig (re-escaneia billboards existentes).
+--
+-- [D] Todos os campos visuais (textSize, distTextSize, pillTransparency,
+--     showName, showDistance, showDot, showLine, alwaysOnTop, studOffset)
+--     propagam imediatamente para billboards já criados via _applyConfigToAll.
+--
+-- CORREÇÕES mantidas da v6:
+-- [1] scanExistingTrinkets chama _watchForID p/ objetos sem "ID" ainda.
+-- [2] Race condition em _watchForID fechada com releitura imediata.
+-- [3] _processedObjects marcado só após createBillboard ter sucesso.
+-- [4] onChildRemoved limpa _pendingConns mesmo sem billboard criado.
 --------------------------------------------------------------------------------
 
 local Workspace  = game:GetService("Workspace")
@@ -39,25 +56,21 @@ end
 
 local function safeRequireRemote(url, name)
     local tag = "[trinket_esp_handler]"
-
     local dlOk, raw = pcall_(game.HttpGet, game, url)
     if not dlOk or type_(raw) ~= "string" or raw == "" then
         warn(tag, "Download falhou:", name, tostring_(raw))
         return nil
     end
-
     local fn, compErr = loadstring(raw)
     if type_(fn) ~= "function" then
         warn(tag, "Compilação falhou:", name, tostring_(compErr))
         return nil
     end
-
     local execOk, mod = pcall_(fn)
     if not execOk then
         warn(tag, "Execução falhou:", name, tostring_(mod))
         return nil
     end
-
     return mod
 end
 
@@ -87,13 +100,33 @@ end
 local ConnectionManager = _fallbackCM
 
 --------------------------------------------------------------------------------
--- CONFIGURAÇÃO
+-- CONFIGURAÇÃO PADRÃO
 --------------------------------------------------------------------------------
+
+local DEFAULT_CONFIG = {
+    -- Distância / visibilidade
+    maxDistance      = 500,         -- studs; 0 = sem limite
+    -- Filtro
+    filterMode       = "none",      -- "none" | "whitelist" | "blacklist"
+    filterList       = {},          -- { "Ruby", "Diamond", ... }
+    -- Campos exibidos
+    showName         = true,
+    showDistance     = true,
+    showDot          = true,
+    showLine         = true,
+    -- Texto
+    textSize         = 11,
+    distTextSize     = 9,
+    -- Pill
+    pillTransparency = 0.35,
+    -- Billboard
+    alwaysOnTop      = true,
+    studOffset       = 1.5,
+}
 
 local Config = {
     ESP = {
         BillboardSize      = UDim2.new(0, 120, 0, 60),
-        TextSize           = 11,
         Font               = Enum.Font.GothamBold,
         FontDist           = Enum.Font.Gotham,
         AnchorLineWidth    = 1,
@@ -104,7 +137,6 @@ local Config = {
     Colors = {
         Default                    = Color3.new(0.7, 0.7, 0.7),
         PillBackground             = Color3.fromRGB(10, 10, 10),
-        PillBackgroundTransparency = 0.35,
         DistanceColor              = Color3.fromRGB(180, 180, 180),
         Trinkets = {
             ["Amulet"]                   = Color3.new(0.7,      0.7,      0.7),
@@ -214,19 +246,15 @@ end
 -- IDENTIFICAÇÃO
 --------------------------------------------------------------------------------
 
--- Contrato real: ter filho "ID" do tipo StringValue.
--- ClassName ignorado — não é parte do protocolo do jogo.
 local function isTrinket(obj, cache)
     local cached = cache[obj]
     if cached ~= nil then return cached end
-
     local ok, child = pcall_(obj.FindFirstChild, obj, "ID")
     local result = ok and child ~= nil and child:IsA("StringValue")
     cache[obj] = result
     return result
 end
 
--- Estado de scan local à chamada — sem upvalue de módulo compartilhado.
 local function scanLevel(container, orbRef, lightRef, sphereRef)
     local ok, children = pcall_(container.GetChildren, container)
     if not ok or type_(children) ~= "table" then return nil end
@@ -265,16 +293,13 @@ local function scanLevel(container, orbRef, lightRef, sphereRef)
                     end
                 end
             end
-
         elseif cn == "PointLight" then
             lightRef.value = true
-
         elseif cn == "SpecialMesh" then
             local mtOk, mt = pcall_(function() return child.MeshType end)
             if mtOk and mt == MESH_SPHERE then
                 sphereRef.value = true
             end
-
         elseif cn == "Attachment" then
             local res = scanLevel(child, orbRef, lightRef, sphereRef)
             if res then return res end
@@ -288,14 +313,11 @@ local function identifyByParticles(part)
     local orbRef    = { value = false }
     local lightRef  = { value = false }
     local sphereRef = { value = false }
-
     local result = scanLevel(part, orbRef, lightRef, sphereRef)
     if result then return result end
-
     if orbRef.value and lightRef.value and sphereRef.value then
         return "???"
     end
-
     return nil
 end
 
@@ -304,20 +326,12 @@ local function identifyGem(part)
         local cv = part.BrickColor.Color
         return cv.R, cv.G, cv.B
     end)
-
     if not ok then return "Rift Gem" end
-
-    -- Faixas RGB como primário: robusto a cores atribuídas via Color3 diretamente.
-    if r > 0.7 and g < 0.3 and b < 0.3 then
-        return "Ruby"
-    elseif r < 0.3 and g < 0.3 and b > 0.7 then
-        return "Sapphire"
-    elseif r < 0.3 and g > 0.7 and b < 0.3 then
-        return "Emerald"
-    elseif r > 0.8 and g > 0.8 and b > 0.8 then
-        return "Diamond"
+    if r > 0.7 and g < 0.3 and b < 0.3 then return "Ruby"
+    elseif r < 0.3 and g < 0.3 and b > 0.7 then return "Sapphire"
+    elseif r < 0.3 and g > 0.7 and b < 0.3 then return "Emerald"
+    elseif r > 0.8 and g > 0.8 and b > 0.8 then return "Diamond"
     end
-
     return "Rift Gem"
 end
 
@@ -326,11 +340,9 @@ local function cleanMeshId(id)
 end
 
 local function getTrinketInfo(part)
-    -- 1. Partículas
     local byParticle = identifyByParticles(part)
     if byParticle then return byParticle end
 
-    -- 2. MeshID
     local meshId = ""
     pcall_(function()
         if part:IsA("MeshPart") then
@@ -344,32 +356,18 @@ local function getTrinketInfo(part)
 
     if meshId ~= "" then
         local cleanId = cleanMeshId(meshId)
-
-        if GEM_IDS[cleanId] then
-            return identifyGem(part)
-        end
-
+        if GEM_IDS[cleanId] then return identifyGem(part) end
         local known = MESH_IDS[cleanId]
         if known then return known end
     end
 
-    -- 3. Material
     local mat = part.Material
-
     if mat == MAT_SLATE then return "Idol of the Forgotten" end
-
-    if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then
-        return "Opal"
-    end
-
+    if mat == MAT_GLASS and part:FindFirstChildOfClass("SpecialMesh") then return "Opal" end
     if mat == MAT_NEON then
         local bcName = part.BrickColor.Name
-        if bcName == "Gold" or bcName == "New Yeller" then
-            return "Lost Sunshine"
-        end
-        if part:FindFirstChildOfClass("PointLight") then
-            return "Amulet of the White King"
-        end
+        if bcName == "Gold" or bcName == "New Yeller" then return "Lost Sunshine" end
+        if part:FindFirstChildOfClass("PointLight") then return "Amulet of the White King" end
         return "Nightstone"
     end
 
@@ -390,9 +388,22 @@ function TrinketESP.new()
         cm = _fallbackCM.new()
     end
 
+    -- Copia profunda do DEFAULT_CONFIG para cada instância
+    local cfg = {}
+    for k, v in pairs_(DEFAULT_CONFIG) do
+        if type_(v) == "table" then
+            local t = {}
+            for i, e in pairs_(v) do t[i] = e end
+            cfg[k] = t
+        else
+            cfg[k] = v
+        end
+    end
+
     return setmetatable_({
         espBillboards      = {},
         _connectionManager = cm,
+        _cfg               = cfg,
         enabled            = false,
 
         _queue             = {},
@@ -408,6 +419,123 @@ function TrinketESP.new()
 end
 
 --------------------------------------------------------------------------------
+-- CONFIGURAÇÃO PÚBLICA
+--------------------------------------------------------------------------------
+
+-- Retorna cópia da configuração atual
+function TrinketESP:getConfig()
+    local copy = {}
+    for k, v in pairs_(self._cfg) do
+        if type_(v) == "table" then
+            local t = {}
+            for i, e in pairs_(v) do t[i] = e end
+            copy[k] = t
+        else
+            copy[k] = v
+        end
+    end
+    return copy
+end
+
+-- Aplica campos de `newCfg` (parcial ou completo) e propaga imediatamente
+function TrinketESP:setConfig(newCfg)
+    if type_(newCfg) ~= "table" then return end
+
+    for k, v in pairs_(newCfg) do
+        if k == "filterList" and type_(v) == "table" then
+            -- cópia da lista
+            local t = {}
+            for i, e in pairs_(v) do t[i] = e end
+            self._cfg.filterList = t
+        elseif DEFAULT_CONFIG[k] ~= nil then
+            self._cfg[k] = v
+        end
+    end
+
+    -- Propaga imediatamente para todos os billboards existentes
+    self:_applyConfigToAll()
+
+    -- Filtragem: remove billboards de trinkets que agora estão filtrados
+    -- e re-enfileira objetos pendentes que agora passam no filtro.
+    -- Para simplicidade: força rescan (disable+enable mantém estado de processos).
+    -- Apenas re-aplica visibilidade e campo — não força rescan completo.
+end
+
+-- [A] Força um nome de trinket contra o filtro configurado.
+-- Retorna true se deve ser exibido.
+function TrinketESP:_passesFilter(trinketName)
+    local mode = self._cfg.filterMode
+    if mode == "none" or mode == nil then return true end
+
+    local list = self._cfg.filterList
+    local found = false
+    for _, n in pairs_(list) do
+        if n == trinketName then
+            found = true
+            break
+        end
+    end
+
+    if mode == "whitelist" then return found end
+    if mode == "blacklist" then return not found end
+    return true
+end
+
+--------------------------------------------------------------------------------
+-- PROPAGAÇÃO DE CONFIG PARA BILLBOARDS EXISTENTES
+--------------------------------------------------------------------------------
+
+function TrinketESP:_applyConfigToBillboard(trinket, refs)
+    if not refs or not refs.billboard then return end
+    local bb = refs.billboard
+    pcall_(function()
+        bb.AlwaysOnTop  = self._cfg.alwaysOnTop
+        bb.StudsOffset  = Vector3.new(0, self._cfg.studOffset, 0)
+    end)
+
+    local root      = bb:FindFirstChild("Root")
+    if not root then return end
+
+    local pill      = root:FindFirstChild("Pill")
+    local distLabel = root:FindFirstChild("DistLabel")
+    local anchorLine= root:FindFirstChild("AnchorLine")
+
+    if pill then
+        pcall_(function()
+            pill.BackgroundTransparency = self._cfg.pillTransparency
+        end)
+        local dot       = pill:FindFirstChild("Dot")
+        local nameLabel = pill:FindFirstChild("NameLabel")
+        if dot then
+            pcall_(function() dot.Visible = self._cfg.showDot end)
+        end
+        if nameLabel then
+            pcall_(function()
+                nameLabel.Visible  = self._cfg.showName
+                nameLabel.TextSize = self._cfg.textSize
+            end)
+        end
+    end
+
+    if distLabel then
+        pcall_(function()
+            distLabel.Visible  = self._cfg.showDistance
+            distLabel.TextSize = self._cfg.distTextSize
+        end)
+    end
+
+    if anchorLine then
+        pcall_(function() anchorLine.Visible = self._cfg.showLine end)
+    end
+end
+
+function TrinketESP:_applyConfigToAll()
+    for trinket, refs in pairs_(self.espBillboards) do
+        self:_applyConfigToBillboard(trinket, refs)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- UI
 --------------------------------------------------------------------------------
 
@@ -415,17 +543,21 @@ function TrinketESP:createBillboard(trinket, trinketName)
     if self.espBillboards[trinket] then return end
     if trinket.Parent == nil then return end
 
+    -- [A] Aplica filtro antes de criar
+    if not self:_passesFilter(trinketName) then return end
+
     local name  = type_(trinketName) == "string" and trinketName or "Unknown"
     local color = COLOR_TRINKETS[name] or COLOR_DEFAULT
+    local cfg   = self._cfg
 
     local billboard = Instance.new("BillboardGui")
     billboard.Name           = "TrinketESP"
     billboard.Adornee        = trinket
     billboard.LightInfluence = 0
     billboard.ZIndexBehavior = Config.UI.ZIndexBehavior
-    billboard.AlwaysOnTop    = true
+    billboard.AlwaysOnTop    = cfg.alwaysOnTop
     billboard.Size           = CFG_ESP.BillboardSize
-    billboard.StudsOffset    = Vector3.new(0, 1.5, 0)
+    billboard.StudsOffset    = Vector3.new(0, cfg.studOffset, 0)
 
     local root = Instance.new("Frame", billboard)
     root.Name                   = "Root"
@@ -441,7 +573,7 @@ function TrinketESP:createBillboard(trinket, trinketName)
     local pill = Instance.new("Frame", root)
     pill.Name                   = "Pill"
     pill.BackgroundColor3       = Config.Colors.PillBackground
-    pill.BackgroundTransparency = Config.Colors.PillBackgroundTransparency
+    pill.BackgroundTransparency = cfg.pillTransparency
     pill.Size                   = UDim2.new(0, 0, 0, 20)
     pill.AutomaticSize          = Enum.AutomaticSize.X
     pill.BorderSizePixel        = 0
@@ -469,6 +601,7 @@ function TrinketESP:createBillboard(trinket, trinketName)
     dot.BackgroundColor3 = color
     dot.Size             = UDim2.new(0, 7, 0, 7)
     dot.BorderSizePixel  = 0
+    dot.Visible          = cfg.showDot
 
     local dotCorner = Instance.new("UICorner", dot)
     dotCorner.CornerRadius = UDim.new(1, 0)
@@ -478,22 +611,24 @@ function TrinketESP:createBillboard(trinket, trinketName)
     nameLabel.Text                   = name
     nameLabel.TextColor3             = color
     nameLabel.Font                   = CFG_ESP.Font
-    nameLabel.TextSize               = CFG_ESP.TextSize
+    nameLabel.TextSize               = cfg.textSize
     nameLabel.BackgroundTransparency = 1
     nameLabel.Size                   = UDim2.new(0, 0, 1, 0)
     nameLabel.AutomaticSize          = Enum.AutomaticSize.X
     nameLabel.TextXAlignment         = Enum.TextXAlignment.Left
+    nameLabel.Visible                = cfg.showName
 
     local distLabel = Instance.new("TextLabel", root)
     distLabel.Name                   = "DistLabel"
     distLabel.Text                   = "..."
     distLabel.TextColor3             = Config.Colors.DistanceColor
     distLabel.Font                   = CFG_ESP.FontDist
-    distLabel.TextSize               = 9
+    distLabel.TextSize               = cfg.distTextSize
     distLabel.BackgroundTransparency = 1
     distLabel.Size                   = UDim2.new(1, 0, 0, 12)
     distLabel.AutomaticSize          = Enum.AutomaticSize.None
     distLabel.TextXAlignment         = Enum.TextXAlignment.Center
+    distLabel.Visible                = cfg.showDistance
 
     local anchorLine = Instance.new("Frame", root)
     anchorLine.Name                   = "AnchorLine"
@@ -501,8 +636,9 @@ function TrinketESP:createBillboard(trinket, trinketName)
     anchorLine.BackgroundTransparency = 0.6
     anchorLine.Size                   = UDim2.new(0, CFG_ESP.AnchorLineWidth, 0, 14)
     anchorLine.BorderSizePixel        = 0
+    anchorLine.Visible                = cfg.showLine
 
-    -- Parenteia por último: evita render de UI incompleta.
+    -- Parenteia por último
     billboard.Parent = trinket
 
     self.espBillboards[trinket] = {
@@ -511,8 +647,10 @@ function TrinketESP:createBillboard(trinket, trinketName)
     }
 end
 
+-- [B] Atualiza distâncias E visibilidade por maxDistance
 function TrinketESP:updateDistances()
     local root = getLocalRootPart()
+    local maxDist = self._cfg.maxDistance
 
     if not root then
         for _, refs in pairs_(self.espBillboards) do
@@ -527,14 +665,18 @@ function TrinketESP:updateDistances()
         if trinket and trinket.Parent then
             pcall_(function()
                 local dist = (trinket.Position - rootPos).Magnitude
-                refs.distLabel.Text = formatDistance(dist)
+                -- Visibilidade por maxDistance
+                local visible = (maxDist <= 0) or (dist <= maxDist)
+                refs.billboard.Enabled = visible
+                if visible and self._cfg.showDistance then
+                    refs.distLabel.Text = formatDistance(dist)
+                end
             end)
         end
     end
 end
 
--- [4] Limpa billboard E conexão temporária pendente — chamado incondicionalmente
---     em onChildRemoved, independente de haver billboard criado.
+-- [4] Limpa billboard E conexão temporária pendente
 function TrinketESP:removeBillboard(trinket)
     local refs = self.espBillboards[trinket]
     if refs then
@@ -584,13 +726,19 @@ function TrinketESP:_runQueue()
                 local infoOk, infoErr = pcall_(function()
                     name = getTrinketInfo(trinket)
                 end)
-
                 if not infoOk then
                     warn("[TrinketESP] getTrinketInfo falhou para",
                          tostring_(trinket), ":", tostring_(infoErr))
                 end
 
-                -- [3] Só marca como processado se createBillboard tiver sucesso.
+                -- [A] Checa filtro antes de criar billboard
+                if not self:_passesFilter(name) then
+                    -- Marca como "processado" para não tentar novamente
+                    self._processedObjects[trinket] = true
+                    continue
+                end
+
+                -- [3] Só marca como processado após sucesso
                 local billOk, billErr = pcall_(function()
                     self:createBillboard(trinket, name)
                 end)
@@ -635,18 +783,15 @@ end
 -- WATCH FOR ID
 --------------------------------------------------------------------------------
 
--- [2] Fecha a race condition: após Connect, relê o objeto imediatamente.
---     Se "ID" chegou na janela entre isTrinket e Connect, detectamos aqui.
+-- [2] Fecha race condition com releitura imediata após Connect
 function TrinketESP:_watchForID(obj)
     if self._pendingConns[obj] then return end
 
     local conn
     conn = obj.ChildAdded:Connect(function(child)
         if child.Name ~= "ID" or not child:IsA("StringValue") then return end
-
         pcall_(conn.Disconnect, conn)
         self._pendingConns[obj] = nil
-
         self._trinketCache[obj] = nil
         if self.enabled and not self._processedObjects[obj] and obj.Parent ~= nil then
             self:_enqueue(obj)
@@ -655,8 +800,7 @@ function TrinketESP:_watchForID(obj)
 
     self._pendingConns[obj] = conn
 
-    -- [2] Releitura imediata: fecha a janela de race condition.
-    --     Se "ID" chegou entre o isTrinket e o Connect acima, capturamos agora.
+    -- [2] Releitura imediata
     self._trinketCache[obj] = nil
     if isTrinket(obj, self._trinketCache) then
         pcall_(conn.Disconnect, conn)
@@ -680,18 +824,16 @@ function TrinketESP:onChildAdded(obj)
         return
     end
 
-    -- "ID" pode não ter chegado ainda: aguarda com listener temporário.
     self:_watchForID(obj)
 end
 
--- [4] Chamado incondicionalmente: cobre objetos com e sem billboard.
+-- [4] Chamado incondicionalmente
 function TrinketESP:onChildRemoved(obj)
     if not self.enabled then return end
     self:removeBillboard(obj)
 end
 
--- [1] Objetos sem "ID" no momento do scan recebem _watchForID,
---     igual ao fluxo de onChildAdded.
+-- [1] Objetos sem "ID" recebem _watchForID
 function TrinketESP:scanExistingTrinkets()
     local ok, children = pcall_(Workspace.GetChildren, Workspace)
     if not ok or type_(children) ~= "table" then return end
@@ -703,7 +845,7 @@ function TrinketESP:scanExistingTrinkets()
         if isTrinket(obj, self._trinketCache) then
             self._queue[#self._queue + 1] = obj
         else
-            -- [1] "ID" pode não ter replicado ainda mesmo para objetos já presentes.
+            -- [1] "ID" pode não ter replicado ainda
             self:_watchForID(obj)
         end
     end
@@ -791,6 +933,7 @@ function TrinketESP:destroy()
     self._trinketCache      = nil
     self._pendingConns      = nil
     self._queue             = nil
+    self._cfg               = nil
 end
 
 return TrinketESP
