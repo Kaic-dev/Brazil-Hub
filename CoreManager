@@ -1,17 +1,25 @@
--- CoreManager.lua (v3 — RogueUILib v3)
+-- CoreManager.lua (v2 — Fly integrado + hardening geral)
 --
--- MUDANÇAS vs v2:
--- [A] CreateWindow: removidos Center/AutoShow/TabPadding/MenuFadeTime; adicionado ToggleKey
--- [B] Tooltip removido de todos os AddToggle (não suportado no v3)
--- [C] Opções extras de cada feature movidas para :ConfigPanel()
---     · AutoAim   → FOV, Studs Behind, Tools
---     · AutoBlock → Skills, Attack Types, Block Distances
---     · PlayerESP → Text Size, Text Color, Display Config fields
---     · FFDetector→ Billboard Distance, Text Size
---     · Fly       → Speed
--- [D] createUISettingsTab: ToggleKeybind agora lido de self_Window diretamente
--- [E] Library.OnUnload → window.OnUnload (self_Window não tem .OnUnload; cleanup
---     feito via window:Unload() que já chama CleanupConnections)
+-- MUDANÇAS NESTA VERSÃO vs. "Bug-fixed":
+-- [A] Fly integrado: carregamento, instância, UI (slider + toggle) em Misc Tab
+-- [B] safeNew recebe módulo diretamente (não self): assinatura corrigida
+-- [C] BrazilHubLoaded: reset em Library.OnUnload já existia; garantido que
+--     também reseta se o script sair por erro não capturado (pcall no main)
+-- [D] loadingScreen:step chamado antes de cada safeLoad; totalSteps ajustado
+--     para 16 (era 15, agora +1 pelo Fly)
+-- [E] connMgr nil-guard em todos os usos: connMgr:add e connMgr:count
+--     protegidos com "if connMgr then" para não explodir se ConnectionManager
+--     falhar no carregamento
+-- [F] createMiscTab: Heartbeat de conexões e memoryKick usam connMgr com
+--     guard; evita crash se connMgr for nil
+-- [G] ModuleInstances.fly adicionado; safeNew corrigido para não passar
+--     módulo como self (era module.new(module, ...) → module.new(...))
+-- [H] OnUnload: destroy explícito de todos os módulos que têm :destroy()
+-- [I] queue_on_teleport: sem mudança de lógica, mas encapsulado em pcall
+--     adicional para evitar crash em executores que têm a função mas
+--     ela falha silenciosamente
+-- [J] waitForLoaded: loop infinito potencial se Players nunca emitir
+--     PlayerAdded corrigido com timeout de 10 tentativas
 
 if getgenv().BrazilHubLoaded then return end
 getgenv().BrazilHubLoaded = true
@@ -34,6 +42,7 @@ local UserInputService = game:GetService("UserInputService")
 
 -- ─── Espera carregamento ──────────────────────────────────────────────────────
 
+-- FIX [J]: proteção contra loop infinito se LocalPlayer nunca aparecer
 local function waitForLoaded()
     if not game:IsLoaded() then
         game.Loaded:Wait()
@@ -64,8 +73,8 @@ local function waitForLoaded()
         return nil, nil
     end
 
-    local playerGui  = LocalPlayer:FindFirstChild("PlayerGui")
-    local guiTries   = 0
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    local guiTries  = 0
     while not playerGui and guiTries < 10 do
         playerGui = LocalPlayer:FindFirstChild("PlayerGui")
             or LocalPlayer:WaitForChild("PlayerGui", 5)
@@ -94,12 +103,9 @@ function LoadingScreen.create()
     end
     if not parent then
         warn("[LoadingScreen] Nenhum parent disponível para o ScreenGui.")
-        local stub = {
-            setTotalSteps = function() end,
-            setStatus     = function() end,
-            step          = function() end,
-            finish        = function() end,
-        }
+        -- retorna objeto stub para não travar o resto do script
+        local stub = { setTotalSteps=function()end, setStatus=function()end,
+                       step=function()end, finish=function()end }
         return stub
     end
 
@@ -127,6 +133,7 @@ function LoadingScreen.create()
     texture.Parent             = overlay
 
     local center = Instance.new("Frame")
+    center.Name                   = "Center"
     center.Size                   = UDim2.new(0, 320, 0, 140)
     center.Position               = UDim2.new(0.5, 0, 0.5, 0)
     center.AnchorPoint            = Vector2.new(0.5, 0.5)
@@ -172,6 +179,7 @@ function LoadingScreen.create()
     makeLabel("Subtitle", "Rogue Lineage", 50, 16, Color3.fromRGB(130, 130, 132), 0.4)
 
     local barBg = Instance.new("Frame")
+    barBg.Name             = "BarBg"
     barBg.Size             = UDim2.new(0.85, 0, 0, 2)
     barBg.Position         = UDim2.new(0.5, 0, 0, 82)
     barBg.AnchorPoint      = Vector2.new(0.5, 0)
@@ -180,6 +188,7 @@ function LoadingScreen.create()
     barBg.Parent           = center
 
     local barFill = Instance.new("Frame")
+    barFill.Name             = "Fill"
     barFill.Size             = UDim2.new(0, 0, 1, 0)
     barFill.BackgroundColor3 = Color3.fromRGB(115, 95, 65)
     barFill.BorderSizePixel  = 0
@@ -212,8 +221,8 @@ function LoadingScreen.create()
     function screen:setStatus(text)  self.status.Text = text end
 
     function screen:step(moduleName)
-        self.currentStep  = self.currentStep + 1
-        local pct         = math.clamp(self.currentStep / self.totalSteps, 0, 1)
+        self.currentStep = self.currentStep + 1
+        local pct = math.clamp(self.currentStep / self.totalSteps, 0, 1)
         self.status.Text  = "Loading " .. moduleName .. "..."
         self.counter.Text = self.currentStep .. " / " .. self.totalSteps
         TweenService:Create(self.barFill,
@@ -304,8 +313,8 @@ end
 -- ─── Loading Screen ───────────────────────────────────────────────────────────
 
 local loadingScreen = LoadingScreen.create()
--- Steps: RogueUILib + KeyHandler (2 manuais) + 14 safeLoad + Indicator = 17
-loadingScreen:setTotalSteps(17)
+-- FIX [D]: +1 step para o módulo Fly
+loadingScreen:setTotalSteps(16)
 task.wait(0.3)
 
 -- ─── Bibliotecas de UI ────────────────────────────────────────────────────────
@@ -416,7 +425,7 @@ function SaveManager:Save(name)
             if typeof(val) == "EnumItem" then
                 data.Options[id] = { Type = "Keybind", EnumType = tostring(val.EnumType), Value = val.Name }
             elseif typeof(val) == "Color3" then
-                data.Options[id] = { Type = "Color", Value = { val.R, val.G, val.B } }
+                data.Options[id] = { Type = "Color",   Value = { val.R, val.G, val.B } }
             end
         end
     end
@@ -559,11 +568,13 @@ local PerformanceMonitor = safeLoad("PerformanceMonitor",  "PerformanceMonitor")
 local FOVCircleManager   = safeLoad("FOVCircleManager",    "FOVCircleManager")
 local ConnectionManager  = safeLoad("ConnectionManager",   "ConnectionManager")
 local UtilsService       = safeLoad("UtilsService",        "UtilsService")
+-- [A] Fly
 local Fly                = safeLoad("Fly",                 "Fly")
-local Indicator          = safeLoad("Indicator",           "Indicator")
 
 -- ─── ConnectionManager global ─────────────────────────────────────────────────
 
+-- FIX [E]: connMgr pode ser nil se ConnectionManager falhar; todos os usos
+-- abaixo são protegidos com guard
 local connMgr = ConnectionManager and ConnectionManager.new() or nil
 if connMgr then
     pcall(function()
@@ -577,6 +588,8 @@ end
 
 -- ─── Instâncias de módulos ────────────────────────────────────────────────────
 
+-- FIX [G]: safeNew não deve passar o módulo como self; module.new é uma
+-- função factory, não um método. Removido o "module" do pcall.
 local function safeNew(module, name, ...)
     if not (module and type(module.new) == "function") then
         warn("[BrazilHub] Módulo não carregado ou sem .new():", name)
@@ -598,6 +611,7 @@ local ModuleInstances = {
     betterLeaderboard = safeNew(BetterLeaderboard, "BetterLeaderboard"),
     trinketEsp        = safeNew(TrinketESP,        "TrinketESP"),
     autoBlock         = safeNew(AutoBlock,         "AutoBlock"),
+    -- [A] Fly recebe connMgr para gerenciar sua própria CharacterAdded conn
     fly               = safeNew(Fly,               "Fly", connMgr),
 }
 
@@ -722,6 +736,7 @@ function UICallbacks.onToggleAutoBlock(e)
     if not ModuleInstances.autoBlock then return end
     if e then ModuleInstances.autoBlock:enable() else ModuleInstances.autoBlock:disable() end
 end
+-- [A]
 function UICallbacks.onToggleFly(e)
     if not ModuleInstances.fly then return end
     if e then ModuleInstances.fly:enable() else ModuleInstances.fly:disable() end
@@ -734,49 +749,23 @@ end
 -- ─── Combat Tab ───────────────────────────────────────────────────────────────
 
 local function createCombatTab(combatTab, fovManager)
-
-    -- ── Auto-Aim ─────────────────────────────────────────────────────────────
     local autoAimGroup = combatTab:AddLeftGroupbox("Auto-Aim")
 
-    local aaToggle = autoAimGroup:AddToggle("AutoAimToggle", {
+    autoAimGroup:AddToggle("AutoAimToggle", {
         Text     = "Auto-Aim",
         Default  = false,
+        Tooltip  = "Ativar/desativar Auto-Aim",
         Callback = UICallbacks.onToggleAutoAim,
     })
-
-    -- [C] Opções de Auto-Aim no ConfigPanel
-    local cpOk, cpErr = pcall(function()
-        aaToggle:ConfigPanel(function(panel)
-            panel:AddSection("FOV")
-            panel:AddSlider("FOV (graus)", 5, 90, CONFIG.AUTO_AIM.DEFAULT_FOV, 0,
-                UICallbacks.onAutoAimFOVChanged)
-
-            panel:AddSection("Posicionamento")
-            panel:AddSlider("Studs Behind Min", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 0,
-                UICallbacks.onStudsBehindMinChanged)
-            panel:AddSlider("Studs Behind Max", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max, 0,
-                UICallbacks.onStudsBehindMaxChanged)
-
-            panel:AddSection("Ferramentas")
-            panel:AddDropdown("Tools", CONFIG.AUTO_AIM.AVAILABLE_TOOLS, true,
-                CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
-                function(selected)
-                    local clean = {}
-                    for name, state in pairs(selected) do
-                        if state then
-                            clean[#clean+1] = name
-                                :gsub(" %[Equipped%]$", "")
-                                :gsub(" %[Backpack%]$", "")
-                        end
-                    end
-                    UICallbacks.onAutoAimToolsChanged(clean)
-                end)
-        end)
-    end)
-    if not cpOk then warn("[BrazilHub] AutoAim ConfigPanel erro:", tostring(cpErr)) end
-
+    autoAimGroup:AddSlider("AutoAimFOV", {
+        Text     = "Auto-Aim FOV (graus)",
+        Default  = CONFIG.AUTO_AIM.DEFAULT_FOV,
+        Min = 5, Max = 90, Rounding = 0,
+        Callback = UICallbacks.onAutoAimFOVChanged,
+    })
     autoAimGroup:AddLabel("FOV Circle Color"):AddColorPicker("FOVCircleColor", {
         Default  = CONFIG.FOV_CIRCLE.DEFAULT_COLOR,
+        Title    = "FOV Circle Color",
         Callback = function(color)
             if fovManager then fovManager:setColor(color) end
         end,
@@ -786,6 +775,29 @@ local function createCombatTab(combatTab, fovManager)
         Default  = false,
         Callback = function(v)
             if fovManager then fovManager:setVisible(v) end
+        end,
+    })
+    autoAimGroup:AddSlider("StudsBehindMin", {
+        Text = "Studs Behind Min", Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
+        Min = 5, Max = 50, Rounding = 0, Callback = UICallbacks.onStudsBehindMinChanged,
+    })
+    autoAimGroup:AddSlider("StudsBehindMax", {
+        Text = "Studs Behind Max", Default = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max,
+        Min = 5, Max = 50, Rounding = 0, Callback = UICallbacks.onStudsBehindMaxChanged,
+    })
+    autoAimGroup:AddDropdown("AutoAimTools", {
+        Values   = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+        Default  = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+        Multi    = true,
+        Text     = "Auto-Aim Tools",
+        Callback = function(selected)
+            local clean = {}
+            for name, state in pairs(selected) do
+                if state then
+                    clean[#clean+1] = name:gsub(" %[Equipped%]$",""):gsub(" %[Backpack%]$","")
+                end
+            end
+            UICallbacks.onAutoAimToolsChanged(clean)
         end,
     })
 
@@ -798,16 +810,14 @@ local function createCombatTab(combatTab, fovManager)
         )
     end
 
-    -- ── Auto Block ────────────────────────────────────────────────────────────
     local autoBlockGroup = combatTab:AddRightGroupbox("Auto Block")
-
-    local abToggle = autoBlockGroup:AddToggle("AutoBlockGrapple", {
+    autoBlockGroup:AddToggle("AutoBlockGrapple", {
         Text     = "Auto Block",
         Default  = false,
+        Tooltip  = "Bloqueia automaticamente ataques selecionados",
         Callback = UICallbacks.onToggleAutoBlock,
     })
 
-    -- [C] Dropdowns e sliders do AutoBlock no ConfigPanel
     if ModuleInstances.autoBlock then
         local allThreats     = ModuleInstances.autoBlock:getAllThreats()
         local skillOptions   = {}
@@ -834,36 +844,33 @@ local function createCombatTab(combatTab, fovManager)
             end
         end
 
-        local cpOk2, cpErr2 = pcall(function()
-            abToggle:ConfigPanel(function(panel)
-                panel:AddSection("Skills")
-                panel:AddDropdown("Skills", skillOptions, true, skillOptions,
-                    function(sel) applyThreatDropdown(skillOptions, sel) end)
+        autoBlockGroup:AddDropdown("SkillsDropdown", {
+            Values = skillOptions, Default = skillOptions, Multi = true, Text = "Skills",
+            Callback = function(sel) applyThreatDropdown(skillOptions, sel) end,
+        })
+        autoBlockGroup:AddDropdown("AttackTypesDropdown", {
+            Values = attackOptions, Default = attackOptions, Multi = true, Text = "Attack Types",
+            Callback = function(sel) applyThreatDropdown(attackOptions, sel) end,
+        })
 
-                panel:AddSection("Attack Types")
-                panel:AddDropdown("Attack Types", attackOptions, true, attackOptions,
-                    function(sel) applyThreatDropdown(attackOptions, sel) end)
-
-                panel:AddSection("Block Distance")
-                for threatId, cfg in pairs(allThreats) do
-                    panel:AddSlider(cfg.name, 5, 300, cfg.blockDistance or 50, 0,
-                        function(v)
-                            ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
-                        end)
-                end
-            end)
-        end)
-        if not cpOk2 then warn("[BrazilHub] AutoBlock ConfigPanel erro:", tostring(cpErr2)) end
+        for threatId, cfg in pairs(allThreats) do
+            local lbl = cfg.name .. " Block Dist"
+            autoBlockGroup:AddSlider(lbl, {
+                Text     = lbl,
+                Default  = cfg.blockDistance or 50,
+                Min = 5, Max = 300, Rounding = 0,
+                Callback = function(v)
+                    ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
+                end,
+            })
+        end
     end
 end
 
 -- ─── Visuals Tab ──────────────────────────────────────────────────────────────
 
 local function createVisualsTab(visualsTab)
-
-    -- ── Player ESP ────────────────────────────────────────────────────────────
     local espGroup  = visualsTab:AddLeftGroupbox("Player ESP")
-
     local espToggle = espGroup:AddToggle("PlayerESP", {
         Text     = "Player ESP",
         Default  = true,
@@ -871,41 +878,39 @@ local function createVisualsTab(visualsTab)
     })
     if espToggle and espToggle.Value then UICallbacks.onTogglePlayerESP(true) end
 
-    -- [C] Opções visuais do ESP no ConfigPanel
-    local cpEspOk, cpEspErr = pcall(function()
-        espToggle:ConfigPanel(function(panel)
-            panel:AddSection("Texto")
-            panel:AddSlider("Text Size", 7, 40, CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE, 0,
-                UICallbacks.onPlayerESPTextSizeChanged)
-            panel:AddColorPicker("Text Color", CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
-                UICallbacks.onPlayerESPTextColorChanged)
-
-            if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
-                panel:AddSection("Campos")
-                for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
-                    local labelText = configKey:gsub("show", ""):gsub("^%l", string.upper)
-                    -- panelAPI:AddToggle usa (labelText, default, cb) — sem id separado
-                    panel:AddToggle(labelText, defaultValue == true, function(val)
-                        ModuleInstances.playerEsp.displayConfig[configKey] = val
-                        if ModuleInstances.playerEsp.setDisplayConfig then
-                            ModuleInstances.playerEsp:setDisplayConfig()
-                        end
-                    end)
-                end
-            end
-        end)
-    end)
-    if not cpEspOk then warn("[BrazilHub] PlayerESP ConfigPanel erro:", tostring(cpEspErr)) end
-
+    if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
+        for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
+            local labelText  = configKey:gsub("show",""):gsub("^%l", string.upper)
+            local toggleName = configKey:gsub("show","Show")
+            espGroup:AddToggle(toggleName, {
+                Text     = labelText,
+                Default  = defaultValue,
+                Callback = function(val)
+                    ModuleInstances.playerEsp.displayConfig[configKey] = val
+                    if ModuleInstances.playerEsp.setDisplayConfig then
+                        ModuleInstances.playerEsp:setDisplayConfig()
+                    end
+                end,
+            })
+        end
+    end
+    espGroup:AddSlider("PlayerESPTextSize", {
+        Text = "Text Size", Default = CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE,
+        Min = 7, Max = 40, Rounding = 0, Callback = UICallbacks.onPlayerESPTextSizeChanged,
+    })
+    espGroup:AddLabel("Text Color"):AddColorPicker("PlayerESPTextColor", {
+        Default  = CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
+        Title    = "Player ESP Text Color",
+        Callback = UICallbacks.onPlayerESPTextColorChanged,
+    })
     if ModuleInstances.playerEsp then
         ModuleInstances.playerEsp:setTextSize(CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE)
         ModuleInstances.playerEsp:setTextColor(CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR)
     end
 
-    -- ── Damage Indicators ─────────────────────────────────────────────────────
     local indicatorsGroup = visualsTab:AddLeftGroupbox("Indicators")
-    -- Indicator já foi carregado no bloco de safeLoad junto com os demais módulos
-    local indicator = Indicator and Indicator.new and Indicator.new() or nil
+    local Indicator       = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "Indicator", "Indicator")
+    local indicator       = Indicator and Indicator.new and Indicator.new() or nil
 
     if indicator then
         indicator.showDamage = true
@@ -913,8 +918,7 @@ local function createVisualsTab(visualsTab)
         indicator:enable()
 
         indicatorsGroup:AddToggle("EnableDamageIndicators", {
-            Text     = "Damage Indicators",
-            Default  = true,
+            Text     = "Damage Indicators", Default = true,
             Callback = function(v)
                 indicator.showDamage = v
                 if v or indicator.showHeal then
@@ -925,8 +929,7 @@ local function createVisualsTab(visualsTab)
             end,
         })
         indicatorsGroup:AddToggle("EnableRegenIndicators", {
-            Text     = "Regen Indicators",
-            Default  = false,
+            Text     = "Regen Indicators", Default = false,
             Callback = function(v)
                 indicator.showHeal = v
                 if v or indicator.showDamage then
@@ -940,31 +943,21 @@ local function createVisualsTab(visualsTab)
         indicatorsGroup:AddLabel("Indicators not available")
     end
 
-    -- ── FF Detector ───────────────────────────────────────────────────────────
     local ffGroup  = visualsTab:AddRightGroupbox("FF Detector")
-
     local ffToggle = ffGroup:AddToggle("FFDetectorToggle", {
-        Text     = "FF Detector",
-        Default  = true,
+        Text     = "FF Detector", Default = true,
         Callback = UICallbacks.onToggleFFDetector,
     })
     if ffToggle and ffToggle.Value then UICallbacks.onToggleFFDetector(true) end
+    ffGroup:AddSlider("BillboardMaxDist", {
+        Text = "Billboard Max Dist", Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE,
+        Min = 10, Max = 300, Rounding = 0, Callback = UICallbacks.onBillboardDistanceChanged,
+    })
+    ffGroup:AddSlider("BillboardTextSize", {
+        Text = "Billboard Text Size", Default = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE,
+        Min = 7, Max = 40, Rounding = 0, Callback = UICallbacks.onBillboardTextSizeChanged,
+    })
 
-    -- [C] Opções do FF Detector no ConfigPanel
-    local cpFfOk, cpFfErr = pcall(function()
-        ffToggle:ConfigPanel(function(panel)
-            panel:AddSection("Billboard")
-            panel:AddSlider("Max Distance", 10, 300,
-                CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE, 0,
-                UICallbacks.onBillboardDistanceChanged)
-            panel:AddSlider("Text Size", 7, 40,
-                CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE, 0,
-                UICallbacks.onBillboardTextSizeChanged)
-        end)
-    end)
-    if not cpFfOk then warn("[BrazilHub] FFDetector ConfigPanel erro:", tostring(cpFfErr)) end
-
-    -- ── Other ─────────────────────────────────────────────────────────────────
     local otherGroup = visualsTab:AddRightGroupbox("Other")
     otherGroup:AddToggle("TrinketESP",        { Text = "Trinket ESP",        Default = false, Callback = UICallbacks.onToggleTrinketESP })
     otherGroup:AddToggle("IntentBillboard",   { Text = "Intent Billboard",   Default = false, Callback = UICallbacks.onToggleIntentBillboard })
@@ -975,29 +968,25 @@ end
 -- ─── Misc Tab ─────────────────────────────────────────────────────────────────
 
 local function createMiscTab(miscTab)
-
-    -- ── Fly ───────────────────────────────────────────────────────────────────
+    -- ── Fly ──────────────────────────────────────────────────────────────────
+    -- [A]
     local flyGroup = miscTab:AddLeftGroupbox("Fly")
-
-    local flyToggle = flyGroup:AddToggle("FlyToggle", {
+    flyGroup:AddToggle("FlyToggle", {
         Text     = "Fly",
         Default  = false,
+        Tooltip  = "WASD para direção, Space para subir, LeftShift para descer",
         Callback = UICallbacks.onToggleFly,
     })
+    flyGroup:AddSlider("FlySpeed", {
+        Text     = "Speed",
+        Default  = CONFIG.FLY.DEFAULT_SPEED,
+        Min      = CONFIG.FLY.MIN_SPEED,
+        Max      = CONFIG.FLY.MAX_SPEED,
+        Rounding = 0,
+        Callback = UICallbacks.onFlySpeedChanged,
+    })
 
-    -- [C] Speed do Fly no ConfigPanel
-    local cpFlyOk, cpFlyErr = pcall(function()
-        flyToggle:ConfigPanel(function(panel)
-            panel:AddSection("Velocidade")
-            panel:AddLabel("WASD = direção  |  Space = subir  |  LShift = descer")
-            panel:AddSlider("Speed", CONFIG.FLY.MIN_SPEED, CONFIG.FLY.MAX_SPEED,
-                CONFIG.FLY.DEFAULT_SPEED, 0,
-                UICallbacks.onFlySpeedChanged)
-        end)
-    end)
-    if not cpFlyOk then warn("[BrazilHub] Fly ConfigPanel erro:", tostring(cpFlyErr)) end
-
-    -- ── Triggers ──────────────────────────────────────────────────────────────
+    -- ── Triggers ─────────────────────────────────────────────────────────────
     local triggersGroup = miscTab:AddLeftGroupbox("Triggers")
 
     if triggerMonitor then
@@ -1012,6 +1001,7 @@ local function createMiscTab(miscTab)
         triggersGroup:AddToggle("EnableTriggerMonitor", {
             Text     = "Enable Trigger Monitor",
             Default  = true,
+            Tooltip  = "Ativar/desativar monitoramento de triggers",
             Callback = function(enabled) triggerMonitor:setEnabled(enabled) end,
         })
         triggerMonitor:setEnabled(true)
@@ -1075,6 +1065,7 @@ local function createMiscTab(miscTab)
             Callback = function(v) memoryThreshold = v end,
         })
 
+        -- FIX [F]: guard connMgr antes de usar
         if connMgr then
             connMgr:add(RunService.Heartbeat:Connect(function(dt)
                 if not memoryKickEnabled or not perfMonitor.isEnabled then return end
@@ -1103,6 +1094,7 @@ local function createMiscTab(miscTab)
     local lastConnUpdate       = 0
     local CONN_UPDATE_INTERVAL = 2.0
 
+    -- FIX [F]: guard connMgr
     if connMgr then
         connMgr:add(RunService.Heartbeat:Connect(function()
             local now = os.clock()
@@ -1156,30 +1148,29 @@ local function createMiscTab(miscTab)
     attachClick(labels.intent,  "Intent",     Intent  and Intent.connectionMgr)
     attachClick(labels.fly,     "Fly",        ModuleInstances.fly               and ModuleInstances.fly._connMgr)
     attachClick(labels.script,  "Script",     connMgr)
+
+    local isUIVisible = true
+    if connMgr then
+        connMgr:add(UserInputService.InputBegan:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.Insert then
+                isUIVisible = not isUIVisible
+            end
+        end), "UserInput.InsertToggle")
+    end
 end
 
 -- ─── UI Settings Tab ──────────────────────────────────────────────────────────
 
--- [D] window é passado como parâmetro para que o keybind atualize self_Window
-local function createUISettingsTab(uiSettingsTab, window)
+local function createUISettingsTab(uiSettingsTab)
     local menuGroup = uiSettingsTab:AddLeftGroupbox("Menu")
-    menuGroup:AddButton("Unload", function() window:Unload() end)
-
-    -- KeyPicker via AddLabel (mesma API do v3)
+    menuGroup:AddButton("Unload", function() Library:Unload() end)
     menuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
-        Default  = "Insert",
-        NoUI     = true,
-        Text     = "Menu keybind",
-        Callback = function(newKey)
-            -- Atualiza o keybind diretamente no self_Window
-            if window.ToggleKeybind then
-                window.ToggleKeybind.Value = newKey
-            end
-        end,
+        Default = "Insert", NoUI = true, Text = "Menu keybind",
     })
+    Library.ToggleKeybind = getgenv().Options.MenuKeybind
 end
 
-local function setupManagers(uiSettingsTab, window, fovManager)
+local function setupManagers(uiSettingsTab, fovManager)
     ThemeManager:SetLibrary(Library)
     SaveManager:SetLibrary(Library)
     SaveManager:IgnoreThemeSettings()
@@ -1190,16 +1181,15 @@ local function setupManagers(uiSettingsTab, window, fovManager)
     ThemeManager:ApplyToTab(uiSettingsTab)
     SaveManager:LoadAutoloadConfig()
 
-    -- [E] Cleanup via window.OnUnload (self_Window já tem Unload que
-    -- dispara CleanupConnections; usamos OnUnload como hook adicional)
-    window.OnUnload = function()
+    -- FIX [H]: destroy em todos os módulos que implementam :destroy()
+    Library.OnUnload = function()
         getgenv().BrazilHubLoaded = false
 
         if connMgr then pcall(function() connMgr:disconnectAll() end) end
         if triggerMonitor then pcall(function() triggerMonitor:destroy() end) end
         if fovManager     then pcall(function() fovManager:destroy() end) end
 
-        for _, inst in pairs(ModuleInstances) do
+        for name, inst in pairs(ModuleInstances) do
             if inst and type(inst.destroy) == "function" then
                 pcall(function() inst:destroy() end)
             elseif inst and type(inst.disable) == "function" then
@@ -1219,13 +1209,13 @@ local function main()
     end
 
     loadingScreen:setStatus("Building UI...")
-
-    -- [A] CreateWindow v3: apenas Title e ToggleKey
     local window = Library:CreateWindow({
-        Title     = "[Brazil Hub]",
-        ToggleKey = Enum.KeyCode.Insert,
+        Title        = "[Brazil Hub]",
+        Center       = true,
+        AutoShow     = true,
+        TabPadding   = 8,
+        MenuFadeTime = 0.2,
     })
-
     local tabs = {
         Combat     = window:AddTab("Combat"),
         Visuals    = window:AddTab("Visuals"),
@@ -1243,20 +1233,19 @@ local function main()
     createCombatTab(tabs.Combat, fovManager)
     createVisualsTab(tabs.Visuals)
     createMiscTab(tabs.Misc)
-    createUISettingsTab(tabs.UISettings, window)
-    setupManagers(tabs.UISettings, window, fovManager)
+    createUISettingsTab(tabs.UISettings)
+    setupManagers(tabs.UISettings, fovManager)
 
     loadingScreen:finish()
 end
 
--- Encapsula main em pcall para garantir reset de BrazilHubLoaded em crash
+-- FIX [C]: encapsula main em pcall para garantir que BrazilHubLoaded seja
+-- resetado mesmo se ocorrer um erro não esperado durante a inicialização
 local ok, err = pcall(main)
 if not ok then
     warn("[BrazilHub] Erro fatal no main:", tostring(err))
     getgenv().BrazilHubLoaded = false
 end
--- Garante que a loading screen nunca fique travada mesmo em crash
-pcall(function() loadingScreen:finish() end)
 
 -- ─── Queue on teleport ────────────────────────────────────────────────────────
 
@@ -1270,6 +1259,7 @@ elseif typeof(getgenv().syn) == "table"
     queueFn = getgenv().syn.queue_on_teleport
 end
 
+-- FIX [I]: pcall extra para executores onde queueFn existe mas falha
 if queueFn then
     local qok, qerr = pcall(queueFn, loaderUrl)
     if not qok then
