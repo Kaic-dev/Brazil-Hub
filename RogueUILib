@@ -194,7 +194,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     local open           = false
     local sliderDragging = false  -- impede fechamento ao arrastar sliders
-    local activeSubMenu  = nil    -- dropdown/colorpicker aberto dentro do painel
 
     local function recalc()
         local h = layout.AbsoluteContentSize.Y + 16
@@ -222,10 +221,9 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     end
 
     local function closePanel()
+        if posConn then posConn:Disconnect(); posConn = nil end
         if not open then return end
         open = false
-        if activeSubMenu then activeSubMenu(); activeSubMenu = nil end
-        if posConn then posConn:Disconnect(); posConn = nil end
         TweenService:Create(panel, TWEEN_FAST, {Size=UDim2.new(0,PANEL_W,0,0)}):Play()
         task.delay(0.14, function() if not open then panel.Visible = false end end)
         playClick()
@@ -475,12 +473,12 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             setSlider(min + math.clamp(rx/track.AbsoluteSize.X,0,1)*(max-min))
         end
 
-        track.InputBegan:Connect(function(input)
+        addCleanup(track.InputBegan:Connect(function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1
             or input.UserInputType==Enum.UserInputType.Touch then
                 dragging=true; sliderDragging=true; updateDrag(input); playClick()
             end
-        end)
+        end))
         addCleanup(UserInputService.InputEnded:Connect(function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1
             or input.UserInputType==Enum.UserInputType.Touch then
@@ -491,6 +489,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement
             or input.UserInputType==Enum.UserInputType.Touch) then updateDrag(input) end
         end))
+        addCleanup(function() dragging=false; sliderDragging=false end)
 
         local api = { Value = value }
         function api:SetValue(v) setSlider(v) end
@@ -585,6 +584,24 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             TweenService:Create(gridRow,TWEEN_FAST,{Size=UDim2.new(1,0,0,expanded and GRID_H or 0)}):Play()
             swStroke.Color = expanded and theme.BorderColor or theme.BorderInactive
         end)
+
+        addCleanup(UserInputService.InputBegan:Connect(function(input)
+            if not expanded then return end
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            task.defer(function()
+                if not expanded then return end
+                local mp = UserInputService:GetMouseLocation()
+                local gp = gridRow.AbsolutePosition; local gs = gridRow.AbsoluteSize
+                local sp = swatch.AbsolutePosition;  local ss = swatch.AbsoluteSize
+                local inG = mp.X>=gp.X and mp.X<=gp.X+gs.X and mp.Y>=gp.Y and mp.Y<=gp.Y+gs.Y
+                local inS = mp.X>=sp.X and mp.X<=sp.X+ss.X and mp.Y>=sp.Y and mp.Y<=sp.Y+ss.Y
+                if not inG and not inS then
+                    expanded = false
+                    TweenService:Create(gridRow, TWEEN_FAST, {Size=UDim2.new(1,0,0,0)}):Play()
+                    swStroke.Color = theme.BorderInactive
+                end
+            end)
+        end))
 
         local api = { Value = value }
         function api:SetValue(c)    setColor(c) end
@@ -741,7 +758,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick()
         end)
 
-        UserInputService.InputBegan:Connect(function(input)
+        addCleanup(UserInputService.InputBegan:Connect(function(input)
             if not dropOpen then return end
             if input.UserInputType~=Enum.UserInputType.MouseButton1 then return end
             task.defer(function()
@@ -753,7 +770,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 local inB=mp.X>=bp2.X and mp.X<=bp2.X+bs2.X and mp.Y>=bp2.Y and mp.Y<=bp2.Y+bs2.Y
                 if not inM and not inB then closeMenu() end
             end)
-        end)
+        end))
 
         local api = { Value=getVal(), Values=values }
         function api:SetValue(v)
@@ -769,6 +786,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValues(nv) values=nv; populateMenu() end
         function api:OnChanged(fn)  table.insert(callbacks,fn) end
         table.insert(callbacks, function(v) api.Value=v end)
+        addCleanup(closeMenu)
         return api
     end
 
@@ -817,11 +835,11 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick(); listening=true
             btn.Text="[...]"; btn.TextColor3=theme.TextNormal
             bStroke.Color=theme.BorderColor
-            listenConn=UserInputService.InputBegan:Connect(function(input)
+            listenConn=addCleanup(UserInputService.InputBegan:Connect(function(input)
                 if input.UserInputType==Enum.UserInputType.Keyboard then
                     stopListening(input.KeyCode)
                 end
-            end)
+            end))
         end)
 
         local api = { Value=curKey }
@@ -927,6 +945,14 @@ function RogueUI:CreateWindow(options)
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
     screenGui.Parent         = UIParent
     self_Window.Gui          = screenGui
+
+    addCleanup(screenGui:GetPropertyChangedSignal("Enabled"):Connect(function()
+        if not screenGui.Enabled then
+            if self_Window._activeDropdown then
+                self_Window._activeDropdown()
+            end
+        end
+    end))
 
     local mainWindow = Instance.new("Frame")
     mainWindow.Name             = "MainWindow"
@@ -1789,7 +1815,7 @@ function RogueUI:CreateWindow(options)
                     local fv=getVal(); self.Value=fv
                     for _,fn in ipairs(self.OnChangedCallbacks) do task.spawn(fn,fv) end
                 end
-                function dropData:SetValues(nv) self.Values=nv; populateMenu() end
+                function dropData:SetValues(nv) values=nv; self.Values=nv; populateMenu() end
                 function dropData:OnChanged(fn) table.insert(self.OnChangedCallbacks,fn) end
                 return dropData
             end
@@ -1940,6 +1966,11 @@ function RogueUI:CreateWindow(options)
                         copen=not copen; cmenu.Visible=copen
                         pbStroke.Color=copen and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                         playClick()
+                    end)
+
+                    addCleanup(function()
+                        copen = false
+                        cmenu.Visible = false
                     end)
 
                     local function setColor(color)
