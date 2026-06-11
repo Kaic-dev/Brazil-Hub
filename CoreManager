@@ -9,6 +9,7 @@
 --     · PlayerESP → Text Size, Text Color, Display Config fields
 --     · FFDetector→ Billboard Distance, Text Size
 --     · Fly       → Speed
+--     · TrinketESP→ Distance, Filter, Fields, Text, Billboard (NOVO v3.1)
 -- [D] createUISettingsTab: ToggleKeybind agora lido de self_Window diretamente
 -- [E] Library.OnUnload → window.OnUnload (self_Window não tem .OnUnload; cleanup
 --     feito via window:Unload() que já chama CleanupConnections)
@@ -742,7 +743,6 @@ local function createCombatTab(combatTab, fovManager)
         Callback = UICallbacks.onToggleAutoAim,
     })
 
-    -- [C] Opções de Auto-Aim no ConfigPanel
     aaToggle:ConfigPanel(function(panel)
         panel:AddSection("FOV")
         panel:AddSlider("FOV (graus)", 5, 90, CONFIG.AUTO_AIM.DEFAULT_FOV, 0,
@@ -802,7 +802,6 @@ local function createCombatTab(combatTab, fovManager)
         Callback = UICallbacks.onToggleAutoBlock,
     })
 
-    -- [C] Dropdowns e sliders do AutoBlock no ConfigPanel
     if ModuleInstances.autoBlock then
         local allThreats     = ModuleInstances.autoBlock:getAllThreats()
         local skillOptions   = {}
@@ -863,7 +862,6 @@ local function createVisualsTab(visualsTab)
     })
     if espToggle and espToggle.Value then UICallbacks.onTogglePlayerESP(true) end
 
-    -- [C] Opções visuais do ESP no ConfigPanel
     espToggle:ConfigPanel(function(panel)
         panel:AddSection("Texto")
         panel:AddSlider("Text Size", 7, 40, CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE, 0,
@@ -938,7 +936,6 @@ local function createVisualsTab(visualsTab)
     })
     if ffToggle and ffToggle.Value then UICallbacks.onToggleFFDetector(true) end
 
-    -- [C] Opções do FF Detector no ConfigPanel
     ffToggle:ConfigPanel(function(panel)
         panel:AddSection("Billboard")
         panel:AddSlider("Max Distance", 10, 300,
@@ -951,7 +948,167 @@ local function createVisualsTab(visualsTab)
 
     -- ── Other ─────────────────────────────────────────────────────────────────
     local otherGroup = visualsTab:AddRightGroupbox("Other")
-    otherGroup:AddToggle("TrinketESP",        { Text = "Trinket ESP",        Default = false, Callback = UICallbacks.onToggleTrinketESP })
+
+    -- ── Trinket ESP ───────────────────────────────────────────────────────────
+    local ALL_TRINKET_NAMES = {
+        "Amulet", "Old Amulet", "Goblet", "Ruby", "Sapphire", "Emerald",
+        "Diamond", "Howler Friend", "Opal", "Idol of the Forgotten",
+        "Lost Sunshine", "Phoenix Down", "Nightstone", "Amulet of the White King",
+        "Scroll", "???", "Azael Horn", "Mysterious Artifact", "Phoenix Flower",
+        "Rift Gem", "Ice Essence",
+    }
+
+    local trinketToggle = otherGroup:AddToggle("TrinketESP", {
+        Text     = "Trinket ESP",
+        Default  = false,
+        Callback = UICallbacks.onToggleTrinketESP,
+    })
+
+    trinketToggle:ConfigPanel(function(panel)
+
+        panel:AddSection("Distância")
+        panel:AddSlider("TrinketMaxDistance", {
+            Text     = "Distância máxima (studs, 0 = sem limite)",
+            Min      = 0,
+            Max      = 2000,
+            Default  = 500,
+            Rounding = 0,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ maxDistance = v })
+                end
+            end,
+        })
+
+        panel:AddSection("Filtro de Trinkets")
+        panel:AddDropdown("TrinketFilterMode", {
+            Values   = { "none", "whitelist", "blacklist" },
+            Default  = "none",
+            Text     = "Modo do filtro",
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ filterMode = v })
+                end
+            end,
+        })
+        panel:AddDropdown("TrinketFilterList", {
+            Values   = ALL_TRINKET_NAMES,
+            Default  = {},
+            Multi    = true,
+            Text     = "Trinkets no filtro",
+            Callback = function(selected)
+                local list = {}
+                for name, state in pairs(selected) do
+                    if state then list[#list + 1] = name end
+                end
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ filterList = list })
+                end
+            end,
+        })
+
+        panel:AddSection("Campos exibidos")
+        panel:AddToggle("TrinketShowName", {
+            Text     = "Mostrar nome",
+            Default  = true,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ showName = v })
+                end
+            end,
+        })
+        panel:AddToggle("TrinketShowDistance", {
+            Text     = "Mostrar distância",
+            Default  = true,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ showDistance = v })
+                end
+            end,
+        })
+        panel:AddToggle("TrinketShowDot", {
+            Text     = "Mostrar dot colorido",
+            Default  = true,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ showDot = v })
+                end
+            end,
+        })
+        panel:AddToggle("TrinketShowLine", {
+            Text     = "Mostrar linha âncora",
+            Default  = true,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ showLine = v })
+                end
+            end,
+        })
+
+        panel:AddSection("Texto")
+        panel:AddSlider("TrinketTextSize", {
+            Text     = "Tamanho do nome",
+            Min      = 7,
+            Max      = 24,
+            Default  = 11,
+            Rounding = 0,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ textSize = v })
+                end
+            end,
+        })
+        panel:AddSlider("TrinketDistTextSize", {
+            Text     = "Tamanho da distância",
+            Min      = 7,
+            Max      = 20,
+            Default  = 9,
+            Rounding = 0,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ distTextSize = v })
+                end
+            end,
+        })
+
+        panel:AddSection("Billboard")
+        panel:AddSlider("TrinketPillTransparency", {
+            Text     = "Transparência da pill",
+            Min      = 0,
+            Max      = 100,
+            Default  = 35,
+            Rounding = 0,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ pillTransparency = v / 100 })
+                end
+            end,
+        })
+        panel:AddSlider("TrinketStudOffset", {
+            Text     = "Offset vertical (studs)",
+            Min      = 1,
+            Max      = 10,
+            Default  = 3,
+            Rounding = 0,
+            Callback = function(v)
+                -- slider 1–10 → studs 0.5–5.0 (passo 0.5)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ studOffset = v * 0.5 })
+                end
+            end,
+        })
+        panel:AddToggle("TrinketAlwaysOnTop", {
+            Text     = "Always On Top",
+            Default  = true,
+            Callback = function(v)
+                if ModuleInstances.trinketEsp then
+                    ModuleInstances.trinketEsp:setConfig({ alwaysOnTop = v })
+                end
+            end,
+        })
+    end)
+
+    -- Demais toggles do grupo Other
     otherGroup:AddToggle("IntentBillboard",   { Text = "Intent Billboard",   Default = false, Callback = UICallbacks.onToggleIntentBillboard })
     otherGroup:AddToggle("BetterLeaderboard", { Text = "Better Leaderboard", Default = false, Callback = UICallbacks.onToggleBetterLeaderboard })
     otherGroup:AddToggle("NoFogToggle",       { Text = "No Fog",             Default = false, Callback = UICallbacks.onToggleNoFog })
@@ -970,7 +1127,6 @@ local function createMiscTab(miscTab)
         Callback = UICallbacks.onToggleFly,
     })
 
-    -- [C] Speed do Fly no ConfigPanel
     flyToggle:ConfigPanel(function(panel)
         panel:AddSection("Velocidade")
         panel:AddLabel("WASD = direção  |  Space = subir  |  LShift = descer")
@@ -1142,18 +1298,15 @@ end
 
 -- ─── UI Settings Tab ──────────────────────────────────────────────────────────
 
--- [D] window é passado como parâmetro para que o keybind atualize self_Window
 local function createUISettingsTab(uiSettingsTab, window)
     local menuGroup = uiSettingsTab:AddLeftGroupbox("Menu")
     menuGroup:AddButton("Unload", function() window:Unload() end)
 
-    -- KeyPicker via AddLabel (mesma API do v3)
     menuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
         Default  = "Insert",
         NoUI     = true,
         Text     = "Menu keybind",
         Callback = function(newKey)
-            -- Atualiza o keybind diretamente no self_Window
             if window.ToggleKeybind then
                 window.ToggleKeybind.Value = newKey
             end
@@ -1172,8 +1325,6 @@ local function setupManagers(uiSettingsTab, window, fovManager)
     ThemeManager:ApplyToTab(uiSettingsTab)
     SaveManager:LoadAutoloadConfig()
 
-    -- [E] Cleanup via window.OnUnload (self_Window já tem Unload que
-    -- dispara CleanupConnections; usamos OnUnload como hook adicional)
     window.OnUnload = function()
         getgenv().BrazilHubLoaded = false
 
@@ -1202,7 +1353,6 @@ local function main()
 
     loadingScreen:setStatus("Building UI...")
 
-    -- [A] CreateWindow v3: apenas Title e ToggleKey
     local window = Library:CreateWindow({
         Title     = "[Brazil Hub]",
         ToggleKey = Enum.KeyCode.Insert,
@@ -1231,7 +1381,6 @@ local function main()
     loadingScreen:finish()
 end
 
--- Encapsula main em pcall para garantir reset de BrazilHubLoaded em crash
 local ok, err = pcall(main)
 if not ok then
     warn("[BrazilHub] Erro fatal no main:", tostring(err))
