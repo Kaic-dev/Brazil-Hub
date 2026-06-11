@@ -1,25 +1,20 @@
 --------------------------------------------------------------------------------
--- trinket_esp_handler.lua (v5 — refatorado)
+-- trinket_esp_handler.lua (v6)
 --
--- MUDANÇAS EM RELAÇÃO À v4:
--- [A] isTrinket: removida restrição de ClassName; contrato real é ter filho
---     "ID" do tipo StringValue. Qualquer instância no Workspace que satisfaça
---     isso é tratada como trinket.
--- [B] onChildAdded: adicionado listener temporário por objeto para o caso de
---     "ID" não ter sido replicado ainda quando ChildAdded disparou no Workspace.
---     O listener se desconecta sozinho ao encontrar "ID", invalidando o cache
---     falso ereenfileirando o objeto.
--- [C] _scanOrb/_scanLight/_scanSphere: movidos de volta para dentro de
---     identifyByParticles como locais de função. O argumento de performance
---     da v4 era inválido (booleanos na stack não são heap-allocated); a solução
---     criava estado compartilhado entre instâncias concorrentes.
--- [D] getTrinketInfo: pcall removido do _runQueue; erros agora são logados
---     com warn() para facilitar diagnóstico de trinkets não identificados.
--- [E] scanExistingTrinkets: usa GetDescendants com filtro de profundidade para
---     cobrir trinkets em sub-hierarquias futuras sem custo excessivo, mantendo
---     compatibilidade com estrutura flat atual.
--- [F] Limpeza geral: upvalues desnecessários removidos, comentários alinhados
---     com o comportamento real do código.
+-- CORREÇÕES EM RELAÇÃO À v5:
+-- [1] scanExistingTrinkets não chamava _watchForID: objetos já presentes no
+--     Workspace com "ID" ainda não replicado eram descartados permanentemente
+--     pois ChildAdded não dispara retroativamente. Corrigido: scan agora chama
+--     _watchForID para qualquer objeto que falhe em isTrinket.
+-- [2] Race condition em _watchForID: janela entre isTrinket retornar false e
+--     Connect ser estabelecido permitia "ID" chegar sem ser detectado. Corrigido:
+--     após Connect, relê o objeto imediatamente para fechar a janela.
+-- [3] _processedObjects marcado antes de createBillboard: se createBillboard
+--     falhasse, o objeto ficava marcado sem billboard e nunca era reprocessado.
+--     Corrigido: marca como processado somente após createBillboard ter sucesso.
+-- [4] onChildRemoved ignorava objetos em _pendingConns sem billboard: conexão
+--     temporária ficava viva após remoção do objeto. Corrigido: onChildRemoved
+--     chama removeBillboard incondicionalmente (que já limpa _pendingConns).
 --------------------------------------------------------------------------------
 
 local Workspace  = game:GetService("Workspace")
@@ -30,12 +25,12 @@ local Players    = game:GetService("Players")
 -- UTILITÁRIOS BASE
 --------------------------------------------------------------------------------
 
-local type_        = type
-local tostring_    = tostring
-local pairs_       = pairs
-local setmetatable_= setmetatable
-local mathFloor    = math.floor
-local pcall_       = pcall
+local type_         = type
+local tostring_     = tostring
+local pairs_        = pairs
+local setmetatable_ = setmetatable
+local mathFloor     = math.floor
+local pcall_        = pcall
 
 local function safeDestroy(obj)
     if obj == nil then return end
@@ -219,8 +214,8 @@ end
 -- IDENTIFICAÇÃO
 --------------------------------------------------------------------------------
 
--- [A] Contrato real: ter filho "ID" do tipo StringValue.
---     ClassName ignorado — não é parte do protocolo do jogo.
+-- Contrato real: ter filho "ID" do tipo StringValue.
+-- ClassName ignorado — não é parte do protocolo do jogo.
 local function isTrinket(obj, cache)
     local cached = cache[obj]
     if cached ~= nil then return cached end
@@ -231,7 +226,7 @@ local function isTrinket(obj, cache)
     return result
 end
 
--- [C] Estado de scan local à função — sem upvalue de módulo compartilhado.
+-- Estado de scan local à chamada — sem upvalue de módulo compartilhado.
 local function scanLevel(container, orbRef, lightRef, sphereRef)
     local ok, children = pcall_(container.GetChildren, container)
     if not ok or type_(children) ~= "table" then return nil end
@@ -290,7 +285,6 @@ local function scanLevel(container, orbRef, lightRef, sphereRef)
 end
 
 local function identifyByParticles(part)
-    -- [C] Tabelas leves como referência mutável — sem upvalue de módulo.
     local orbRef    = { value = false }
     local lightRef  = { value = false }
     local sphereRef = { value = false }
@@ -313,8 +307,7 @@ local function identifyGem(part)
 
     if not ok then return "Rift Gem" end
 
-    -- Primário: faixas RGB (robusto a cores atribuídas via Color3 diretamente).
-    -- Secundário: BrickColor.Name como desempate em casos limítrofes.
+    -- Faixas RGB como primário: robusto a cores atribuídas via Color3 diretamente.
     if r > 0.7 and g < 0.3 and b < 0.3 then
         return "Ruby"
     elseif r < 0.3 and g < 0.3 and b > 0.7 then
@@ -408,7 +401,7 @@ function TrinketESP.new()
 
         _trinketCache      = setmetatable_({}, { __mode = "k" }),
         _processedObjects  = setmetatable_({}, { __mode = "k" }),
-        _pendingConns      = setmetatable_({}, { __mode = "k" }), -- [B] listeners temporários
+        _pendingConns      = setmetatable_({}, { __mode = "k" }),
 
         _heartbeatConn     = nil,
     }, TrinketESP)
@@ -509,6 +502,7 @@ function TrinketESP:createBillboard(trinket, trinketName)
     anchorLine.Size                   = UDim2.new(0, CFG_ESP.AnchorLineWidth, 0, 14)
     anchorLine.BorderSizePixel        = 0
 
+    -- Parenteia por último: evita render de UI incompleta.
     billboard.Parent = trinket
 
     self.espBillboards[trinket] = {
@@ -539,16 +533,18 @@ function TrinketESP:updateDistances()
     end
 end
 
+-- [4] Limpa billboard E conexão temporária pendente — chamado incondicionalmente
+--     em onChildRemoved, independente de haver billboard criado.
 function TrinketESP:removeBillboard(trinket)
     local refs = self.espBillboards[trinket]
     if refs then
         safeDestroy(refs.billboard)
         self.espBillboards[trinket] = nil
     end
+
     self._trinketCache[trinket]     = nil
     self._processedObjects[trinket] = nil
 
-    -- [B] Cancela listener temporário pendente, se houver.
     local conn = self._pendingConns[trinket]
     if conn then
         pcall_(conn.Disconnect, conn)
@@ -578,26 +574,32 @@ function TrinketESP:_runQueue()
                 self._queueHead = self._queueHead + 1
                 processed       = processed + 1
 
-                if trinket ~= nil
-                and not self._processedObjects[trinket]
-                and trinket.Parent ~= nil then
+                if trinket == nil
+                or self._processedObjects[trinket]
+                or trinket.Parent == nil then
+                    continue
+                end
+
+                local name = "Unknown"
+                local infoOk, infoErr = pcall_(function()
+                    name = getTrinketInfo(trinket)
+                end)
+
+                if not infoOk then
+                    warn("[TrinketESP] getTrinketInfo falhou para",
+                         tostring_(trinket), ":", tostring_(infoErr))
+                end
+
+                -- [3] Só marca como processado se createBillboard tiver sucesso.
+                local billOk, billErr = pcall_(function()
+                    self:createBillboard(trinket, name)
+                end)
+
+                if billOk then
                     self._processedObjects[trinket] = true
-
-                    -- [D] Sem pcall engolindo erro silenciosamente:
-                    --     falhas são logadas para diagnóstico.
-                    local name = "Unknown"
-                    local infoOk, infoErr = pcall_(function()
-                        name = getTrinketInfo(trinket)
-                    end)
-
-                    if not infoOk then
-                        warn("[TrinketESP] getTrinketInfo falhou para",
-                             tostring_(trinket), ":", tostring_(infoErr))
-                    end
-
-                    pcall_(function()
-                        self:createBillboard(trinket, name)
-                    end)
+                else
+                    warn("[TrinketESP] createBillboard falhou para",
+                         tostring_(trinket), ":", tostring_(billErr))
                 end
             end
 
@@ -630,23 +632,21 @@ function TrinketESP:_enqueue(obj)
 end
 
 --------------------------------------------------------------------------------
--- CALLBACKS
+-- WATCH FOR ID
 --------------------------------------------------------------------------------
 
--- [B] Listener temporário: se "ID" ainda não chegou quando ChildAdded disparou
---     no Workspace, observa o objeto e reprocessa quando "ID" aparecer.
+-- [2] Fecha a race condition: após Connect, relê o objeto imediatamente.
+--     Se "ID" chegou na janela entre isTrinket e Connect, detectamos aqui.
 function TrinketESP:_watchForID(obj)
-    if self._pendingConns[obj] then return end  -- já observando
+    if self._pendingConns[obj] then return end
 
     local conn
     conn = obj.ChildAdded:Connect(function(child)
         if child.Name ~= "ID" or not child:IsA("StringValue") then return end
 
-        -- Limpa a si mesmo
         pcall_(conn.Disconnect, conn)
         self._pendingConns[obj] = nil
 
-        -- Invalida o cache falso e reprocessa
         self._trinketCache[obj] = nil
         if self.enabled and not self._processedObjects[obj] and obj.Parent ~= nil then
             self:_enqueue(obj)
@@ -654,7 +654,22 @@ function TrinketESP:_watchForID(obj)
     end)
 
     self._pendingConns[obj] = conn
+
+    -- [2] Releitura imediata: fecha a janela de race condition.
+    --     Se "ID" chegou entre o isTrinket e o Connect acima, capturamos agora.
+    self._trinketCache[obj] = nil
+    if isTrinket(obj, self._trinketCache) then
+        pcall_(conn.Disconnect, conn)
+        self._pendingConns[obj] = nil
+        if self.enabled and not self._processedObjects[obj] and obj.Parent ~= nil then
+            self:_enqueue(obj)
+        end
+    end
 end
+
+--------------------------------------------------------------------------------
+-- CALLBACKS
+--------------------------------------------------------------------------------
 
 function TrinketESP:onChildAdded(obj)
     if not self.enabled then return end
@@ -665,24 +680,31 @@ function TrinketESP:onChildAdded(obj)
         return
     end
 
-    -- [B] "ID" pode não ter chegado ainda: agenda reprocessamento.
+    -- "ID" pode não ter chegado ainda: aguarda com listener temporário.
     self:_watchForID(obj)
 end
 
+-- [4] Chamado incondicionalmente: cobre objetos com e sem billboard.
 function TrinketESP:onChildRemoved(obj)
     if not self.enabled then return end
-    if self.espBillboards[obj] == nil then return end
     self:removeBillboard(obj)
 end
 
+-- [1] Objetos sem "ID" no momento do scan recebem _watchForID,
+--     igual ao fluxo de onChildAdded.
 function TrinketESP:scanExistingTrinkets()
     local ok, children = pcall_(Workspace.GetChildren, Workspace)
     if not ok or type_(children) ~= "table" then return end
 
     for i = 1, #children do
         local obj = children[i]
-        if isTrinket(obj, self._trinketCache) and not self._processedObjects[obj] then
+        if self._processedObjects[obj] then continue end
+
+        if isTrinket(obj, self._trinketCache) then
             self._queue[#self._queue + 1] = obj
+        else
+            -- [1] "ID" pode não ter replicado ainda mesmo para objetos já presentes.
+            self:_watchForID(obj)
         end
     end
 
@@ -739,7 +761,6 @@ function TrinketESP:disable()
         self._heartbeatConn = nil
     end
 
-    -- Cancela todos os listeners temporários pendentes
     for obj, conn in pairs_(self._pendingConns) do
         pcall_(conn.Disconnect, conn)
         self._pendingConns[obj] = nil
