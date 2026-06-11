@@ -1657,10 +1657,12 @@ function RogueUI:CreateWindow(options)
                 end
 
                 local open=false; local posConn=nil
+                local openGen=0
 
                 local function closeMenu()
                     if not open then return end
-                    open=false; menu.Visible=false
+                    open=false; openGen=openGen+1
+                    menu.Visible=false
                     bStroke.Color=RogueUI.Theme.BorderInactive
                     if posConn then posConn:Disconnect(); posConn=nil end
                     if self_Window._activeDropdown == closeMenu then
@@ -1672,8 +1674,9 @@ function RogueUI:CreateWindow(options)
                     if not open then return end
                     if input.UserInputType~=Enum.UserInputType.MouseButton1
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
+                    local gen = openGen
                     task.defer(function()
-                        if not open then return end
+                        if not open or openGen ~= gen then return end
                         local mp=UserInputService:GetMouseLocation()
                         local mp2=menu.AbsolutePosition; local ms=menu.AbsoluteSize
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
@@ -1685,11 +1688,10 @@ function RogueUI:CreateWindow(options)
                 addCleanup(closeMenu)
 
                 local function openMenu()
-                    -- Fecha outro dropdown que estiver aberto
                     if self_Window._activeDropdown and self_Window._activeDropdown ~= closeMenu then
                         self_Window._activeDropdown()
                     end
-                    open=true; self_Window._activeDropdown = closeMenu
+                    open=true; openGen=openGen+1; self_Window._activeDropdown = closeMenu
                     posMenu(); menu.Visible=true
                     bStroke.Color=RogueUI.Theme.BorderColor
                     posConn=RunService.Heartbeat:Connect(posMenu)
@@ -1697,11 +1699,7 @@ function RogueUI:CreateWindow(options)
                 end
 
                 btn.MouseButton1Click:Connect(function()
-                    if open then
-                        closeMenu(); playClick()
-                    else
-                        openMenu()
-                    end
+                    if open then closeMenu(); playClick() else openMenu() end
                 end)
 
                 local function populateMenu()
