@@ -839,7 +839,8 @@ local function createCombatTab(combatTab, fovManager)
 
             panel:AddSection("Block Distance")
             for threatId, cfg in pairs(allThreats) do
-                panel:AddSlider(cfg.name, 5, 300, cfg.blockDistance or 50, 0,
+                local blockDist = type(cfg.blockDistance) == "number" and cfg.blockDistance or 50
+                panel:AddSlider(cfg.name, 5, 300, blockDist, 0,
                     function(v)
                         ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
                     end)
@@ -868,19 +869,6 @@ local function createVisualsTab(visualsTab)
             UICallbacks.onPlayerESPTextSizeChanged)
         panel:AddColorPicker("Text Color", CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
             UICallbacks.onPlayerESPTextColorChanged)
-
-        if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
-            panel:AddSection("Campos")
-            for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
-                local labelText  = configKey:gsub("show", ""):gsub("^%l", string.upper)
-                panel:AddToggle(labelText, defaultValue, function(val)
-                    ModuleInstances.playerEsp.displayConfig[configKey] = val
-                    if ModuleInstances.playerEsp.setDisplayConfig then
-                        ModuleInstances.playerEsp:setDisplayConfig()
-                    end
-                end)
-            end
-        end
     end)
 
     if ModuleInstances.playerEsp then
@@ -967,145 +955,42 @@ local function createVisualsTab(visualsTab)
     trinketToggle:ConfigPanel(function(panel)
 
         panel:AddSection("Distância")
-        panel:AddSlider("TrinketMaxDistance", {
-            Text     = "Distância máxima (studs, 0 = sem limite)",
-            Min      = 0,
-            Max      = 2000,
-            Default  = 500,
-            Rounding = 0,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ maxDistance = v })
-                end
-            end,
-        })
+        panel:AddSlider("Distância máxima (studs, 0=sem limite)", 0, 2000, 500, 0, function(v)
+            if ModuleInstances.trinketEsp then
+                ModuleInstances.trinketEsp:setConfig({ maxDistance = v })
+            end
+        end)
 
         panel:AddSection("Filtro de Trinkets")
-        panel:AddDropdown("TrinketFilterMode", {
-            Values   = { "none", "whitelist", "blacklist" },
-            Default  = "none",
-            Text     = "Modo do filtro",
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ filterMode = v })
-                end
-            end,
-        })
-        panel:AddDropdown("TrinketFilterList", {
-            Values   = ALL_TRINKET_NAMES,
-            Default  = {},
-            Multi    = true,
-            Text     = "Trinkets no filtro",
-            Callback = function(selected)
-                local list = {}
-                for name, state in pairs(selected) do
-                    if state then list[#list + 1] = name end
-                end
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ filterList = list })
-                end
-            end,
-        })
+        panel:AddDropdown("Modo do filtro", { "none", "whitelist", "blacklist" }, false, "none", function(v)
+            if ModuleInstances.trinketEsp then
+                ModuleInstances.trinketEsp:setConfig({ filterMode = v })
+            end
+        end)
+        panel:AddDropdown("Trinkets no filtro", ALL_TRINKET_NAMES, true, {}, function(selected)
+            local list = {}
+            for name, state in pairs(selected) do
+                if state then list[#list + 1] = name end
+            end
+            if ModuleInstances.trinketEsp then
+                ModuleInstances.trinketEsp:setConfig({ filterList = list })
+            end
+        end)
 
         panel:AddSection("Campos exibidos")
-        panel:AddToggle("TrinketShowName", {
-            Text     = "Mostrar nome",
-            Default  = true,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ showName = v })
-                end
-            end,
-        })
-        panel:AddToggle("TrinketShowDistance", {
-            Text     = "Mostrar distância",
-            Default  = true,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ showDistance = v })
-                end
-            end,
-        })
-        panel:AddToggle("TrinketShowDot", {
-            Text     = "Mostrar dot colorido",
-            Default  = true,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ showDot = v })
-                end
-            end,
-        })
-        panel:AddToggle("TrinketShowLine", {
-            Text     = "Mostrar linha âncora",
-            Default  = true,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ showLine = v })
-                end
-            end,
-        })
+        panel:AddModeSelect("Mostrar nome",         {"Sim","Não"}, 1, function(_,v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ showName     = v=="Sim" }) end end)
+        panel:AddModeSelect("Mostrar distância",    {"Sim","Não"}, 1, function(_,v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ showDistance = v=="Sim" }) end end)
+        panel:AddModeSelect("Mostrar dot colorido", {"Sim","Não"}, 1, function(_,v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ showDot      = v=="Sim" }) end end)
+        panel:AddModeSelect("Mostrar linha âncora", {"Sim","Não"}, 1, function(_,v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ showLine     = v=="Sim" }) end end)
 
         panel:AddSection("Texto")
-        panel:AddSlider("TrinketTextSize", {
-            Text     = "Tamanho do nome",
-            Min      = 7,
-            Max      = 24,
-            Default  = 11,
-            Rounding = 0,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ textSize = v })
-                end
-            end,
-        })
-        panel:AddSlider("TrinketDistTextSize", {
-            Text     = "Tamanho da distância",
-            Min      = 7,
-            Max      = 20,
-            Default  = 9,
-            Rounding = 0,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ distTextSize = v })
-                end
-            end,
-        })
+        panel:AddSlider("Tamanho do nome",      7,  24, 11, 0, function(v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ textSize     = v }) end end)
+        panel:AddSlider("Tamanho da distância", 7,  20,  9, 0, function(v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ distTextSize = v }) end end)
 
         panel:AddSection("Billboard")
-        panel:AddSlider("TrinketPillTransparency", {
-            Text     = "Transparência da pill",
-            Min      = 0,
-            Max      = 100,
-            Default  = 35,
-            Rounding = 0,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ pillTransparency = v / 100 })
-                end
-            end,
-        })
-        panel:AddSlider("TrinketStudOffset", {
-            Text     = "Offset vertical (studs)",
-            Min      = 1,
-            Max      = 10,
-            Default  = 3,
-            Rounding = 0,
-            Callback = function(v)
-                -- slider 1–10 → studs 0.5–5.0 (passo 0.5)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ studOffset = v * 0.5 })
-                end
-            end,
-        })
-        panel:AddToggle("TrinketAlwaysOnTop", {
-            Text     = "Always On Top",
-            Default  = true,
-            Callback = function(v)
-                if ModuleInstances.trinketEsp then
-                    ModuleInstances.trinketEsp:setConfig({ alwaysOnTop = v })
-                end
-            end,
-        })
+        panel:AddSlider("Transparência da pill",    0, 100, 35, 0, function(v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ pillTransparency = v / 100 }) end end)
+        panel:AddSlider("Offset vertical (studs)",  1,  10,  3, 0, function(v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ studOffset = v * 0.5 }) end end)
+        panel:AddModeSelect("Always On Top", {"Sim","Não"}, 1, function(_,v) if ModuleInstances.trinketEsp then ModuleInstances.trinketEsp:setConfig({ alwaysOnTop = v=="Sim" }) end end)
     end)
 
     -- Demais toggles do grupo Other
