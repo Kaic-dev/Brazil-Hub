@@ -194,7 +194,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     local open           = false
     local sliderDragging = false  -- impede fechamento ao arrastar sliders
-    local openPopups     = {}     -- rastreia popups abertos fora dos limites do painel (ex: dropdown)
+    local activeSubMenu  = nil    -- dropdown/colorpicker aberto dentro do painel
 
     local function recalc()
         local h = layout.AbsoluteContentSize.Y + 16
@@ -224,6 +224,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     local function closePanel()
         if not open then return end
         open = false
+        if activeSubMenu then activeSubMenu(); activeSubMenu = nil end
         if posConn then posConn:Disconnect(); posConn = nil end
         TweenService:Create(panel, TWEEN_FAST, {Size=UDim2.new(0,PANEL_W,0,0)}):Play()
         task.delay(0.14, function() if not open then panel.Visible = false end end)
@@ -243,27 +244,23 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     phClose.MouseButton1Click:Connect(closePanel)
 
+    local GuiService = game:GetService("GuiService")
+
     if addCleanup then
         addCleanup(UserInputService.InputBegan:Connect(function(input)
             if not open then return end
             if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
+            -- Checa imediatamente (sem task.defer) se o clique foi dentro do painel
+            -- Usa GetGuiObjectsAtPosition para detectar qualquer filho do painel
             local mp = UserInputService:GetMouseLocation()
-            -- Verifica se o clique foi dentro dos limites do painel
-            local pp = panel.AbsolutePosition
-            local ps = panel.AbsoluteSize
-            if mp.X >= pp.X and mp.X <= pp.X + ps.X and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y then
-                return  -- clique foi dentro do painel
-            end
-            -- Verifica se o clique foi em algum popup aberto do painel (ex: dropdown)
-            for frame in pairs(openPopups) do
-                if frame and frame.Parent then
-                    local fp = frame.AbsolutePosition
-                    local fs = frame.AbsoluteSize
-                    if mp.X >= fp.X and mp.X <= fp.X + fs.X and mp.Y >= fp.Y and mp.Y <= fp.Y + fs.Y then
-                        return  -- clique foi dentro de um popup aberto
-                    end
+            local objects = GuiService:GetGuiObjectsAtPosition(mp.X, mp.Y)
+            for _, obj in ipairs(objects) do
+                local cur = obj
+                while cur do
+                    if cur == panel then return end  -- clique foi dentro do painel
+                    cur = cur.Parent
                 end
             end
             -- Verifica anchorFrame (gear btn)
@@ -688,7 +685,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             dropOpen = false; menuFrame.Visible=false
             bStroke.Color = theme.BorderInactive
             if dropPosConn then dropPosConn:Disconnect(); dropPosConn=nil end
-            openPopups[menuFrame] = nil
         end
 
         local function posMenu()
@@ -741,7 +737,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 posMenu(); menuFrame.Visible=true
                 bStroke.Color=theme.BorderColor
                 dropPosConn=RunService.Heartbeat:Connect(posMenu)
-                openPopups[menuFrame] = true
             else closeMenu() end
             playClick()
         end)
