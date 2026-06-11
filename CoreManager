@@ -304,7 +304,8 @@ end
 -- ─── Loading Screen ───────────────────────────────────────────────────────────
 
 local loadingScreen = LoadingScreen.create()
-loadingScreen:setTotalSteps(16)
+-- Steps: RogueUILib + KeyHandler (2 manuais) + 14 safeLoad + Indicator = 17
+loadingScreen:setTotalSteps(17)
 task.wait(0.3)
 
 -- ─── Bibliotecas de UI ────────────────────────────────────────────────────────
@@ -559,6 +560,7 @@ local FOVCircleManager   = safeLoad("FOVCircleManager",    "FOVCircleManager")
 local ConnectionManager  = safeLoad("ConnectionManager",   "ConnectionManager")
 local UtilsService       = safeLoad("UtilsService",        "UtilsService")
 local Fly                = safeLoad("Fly",                 "Fly")
+local Indicator          = safeLoad("Indicator",           "Indicator")
 
 -- ─── ConnectionManager global ─────────────────────────────────────────────────
 
@@ -892,8 +894,8 @@ local function createVisualsTab(visualsTab)
 
     -- ── Damage Indicators ─────────────────────────────────────────────────────
     local indicatorsGroup = visualsTab:AddLeftGroupbox("Indicators")
-    local Indicator       = safeRequireRemote(BRAZIL_HUB_BASE_URL .. "Indicator", "Indicator")
-    local indicator       = Indicator and Indicator.new and Indicator.new() or nil
+    -- Indicator já foi carregado no bloco de safeLoad junto com os demais módulos
+    local indicator = Indicator and Indicator.new and Indicator.new() or nil
 
     if indicator then
         indicator.showDamage = true
@@ -1237,6 +1239,8 @@ if not ok then
     warn("[BrazilHub] Erro fatal no main:", tostring(err))
     getgenv().BrazilHubLoaded = false
 end
+-- Garante que a loading screen nunca fique travada mesmo em crash
+pcall(function() loadingScreen:finish() end)
 
 -- ─── Queue on teleport ────────────────────────────────────────────────────────
 
