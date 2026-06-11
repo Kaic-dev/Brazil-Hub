@@ -128,10 +128,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     panelStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     panelStroke.Parent          = panel
 
-    -- Rastreia se o cursor está dentro do painel (mais confiável que hit-test geométrico)
-    panel.MouseEnter:Connect(function() cursorInPanel = true end)
-    panel.MouseLeave:Connect(function() cursorInPanel = false end)
-
     local ph = Instance.new("Frame")
     ph.Size             = UDim2.new(1,0,0,24)
     ph.BackgroundColor3 = theme.ConfigHeaderBg
@@ -198,7 +194,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     local open           = false
     local sliderDragging = false  -- impede fechamento ao arrastar sliders
-    local cursorInPanel  = false  -- rastreado via MouseEnter/Leave do painel
 
     local function recalc()
         local h = layout.AbsoluteContentSize.Y + 16
@@ -228,7 +223,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     local function closePanel()
         if not open then return end
         open = false
-        cursorInPanel = false
         if posConn then posConn:Disconnect(); posConn = nil end
         TweenService:Create(panel, TWEEN_FAST, {Size=UDim2.new(0,PANEL_W,0,0)}):Play()
         task.delay(0.14, function() if not open then panel.Visible = false end end)
@@ -248,20 +242,30 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     phClose.MouseButton1Click:Connect(closePanel)
 
+    local GuiService = game:GetService("GuiService")
+
     if addCleanup then
         addCleanup(UserInputService.InputBegan:Connect(function(input)
             if not open then return end
             if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
-            task.defer(function()
-                if not open or sliderDragging or cursorInPanel then return end
-                -- Verifica também se ainda está sobre o anchorFrame (gear btn)
-                local mp = UserInputService:GetMouseLocation()
-                local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
-                local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
-                local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
-                if not inAnchor then closePanel() end
-            end)
+            if sliderDragging then return end
+            -- Checa imediatamente (sem task.defer) se o clique foi dentro do painel
+            -- Usa GetGuiObjectsAtPosition para detectar qualquer filho do painel
+            local mp = UserInputService:GetMouseLocation()
+            local objects = GuiService:GetGuiObjectsAtPosition(mp.X, mp.Y)
+            for _, obj in ipairs(objects) do
+                local cur = obj
+                while cur do
+                    if cur == panel then return end  -- clique foi dentro do painel
+                    cur = cur.Parent
+                end
+            end
+            -- Verifica anchorFrame (gear btn)
+            local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
+            local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
+            local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
+            if not inAnchor then closePanel() end
         end))
         addCleanup(function() closePanel() end)
     end
