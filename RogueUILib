@@ -946,13 +946,15 @@ function RogueUI:CreateWindow(options)
     screenGui.Parent         = UIParent
     self_Window.Gui          = screenGui
 
-    addCleanup(screenGui:GetPropertyChangedSignal("Enabled"):Connect(function()
-        if not screenGui.Enabled then
-            if self_Window._activeDropdown then
-                self_Window._activeDropdown()
+    pcall(function()
+        addCleanup(screenGui:GetPropertyChangedSignal("Enabled"):Connect(function()
+            if not screenGui.Enabled then
+                if self_Window._activeDropdown then
+                    self_Window._activeDropdown()
+                end
             end
-        end
-    end))
+        end))
+    end)
 
     local mainWindow = Instance.new("Frame")
     mainWindow.Name             = "MainWindow"
