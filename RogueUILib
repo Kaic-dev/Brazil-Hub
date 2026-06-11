@@ -469,14 +469,14 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 dragging=true; updateDrag(input); playClick()
             end
         end)
-        UserInputService.InputEnded:Connect(function(input)
+        addCleanup(UserInputService.InputEnded:Connect(function(input)
             if input.UserInputType==Enum.UserInputType.MouseButton1
             or input.UserInputType==Enum.UserInputType.Touch then dragging=false end
-        end)
-        UserInputService.InputChanged:Connect(function(input)
+        end))
+        addCleanup(UserInputService.InputChanged:Connect(function(input)
             if dragging and (input.UserInputType==Enum.UserInputType.MouseMovement
             or input.UserInputType==Enum.UserInputType.Touch) then updateDrag(input) end
-        end)
+        end))
 
         local api = { Value = value }
         function api:SetValue(v) setSlider(v) end
