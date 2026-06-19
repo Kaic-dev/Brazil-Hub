@@ -888,8 +888,9 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                     local bp2=btn.AbsolutePosition;       local bs2=btn.AbsoluteSize
                     local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                     local inB=mp.X>=bp2.X and mp.X<=bp2.X+bs2.X and mp.Y>=bp2.Y and mp.Y<=bp2.Y+bs2.Y
-                    print(string.format("[DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s",
-                        tostring(labelText), tostring(mp), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB)))
+                    print(string.format("[DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                        tostring(labelText), tostring(mp), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB),
+                        tostring(menuFrame.Parent and menuFrame.Parent.Name), tostring(menuFrame.Parent and menuFrame.Parent.ClassName), tostring(menuFrame.Position)))
                     if not inM and not inB then
                         print("[DD-DEBUG] Closing menu for:", labelText)
                         closeMenu()
@@ -1844,8 +1845,9 @@ function RogueUI:CreateWindow(options)
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                         local inB=mp.X>=bp.X  and mp.X<=bp.X+bs.X  and mp.Y>=bp.Y  and mp.Y<=bp.Y+bs.Y
-                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s",
-                            tostring(text), tostring(mp), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB)))
+                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                            tostring(text), tostring(mp), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB),
+                            tostring(menu.Parent and menu.Parent.Name), tostring(menu.Parent and menu.Parent.ClassName), tostring(menu.Position)))
                         if not inM and not inB then
                             print("[MAIN-DD-DEBUG] Closing main dropdown:", text)
                             closeMenu()
