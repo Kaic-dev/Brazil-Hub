@@ -1,5 +1,6 @@
 -- BetterLeaderboard.lua (Bug-fixed + Optimized)
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
 -- ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -11,6 +12,7 @@ local CONFIG = {
     PLAYER_LABEL_SIZE       = UDim2.new(1, -34, 1, 0),
     RETRY_INTERVAL          = 1,
     PLAYERGUI_TIMEOUT       = 5,
+    VERIFY_INTERVAL         = 5, -- seconds: periodic client-side verification against UtilsService
 
     COLORS = {
         WHITE          = Color3.new(1, 1, 1),
@@ -69,6 +71,12 @@ local UtilsService = safeRequireRemote(
 )
 local utils = UtilsService and UtilsService.new() or nil
 
+local PlayerDataModule = safeRequireRemote(
+    "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/PlayerData",
+    "PlayerData"
+)
+
+
 local ConnectionManager = safeRequireRemote(
     "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
     "ConnectionManager"
@@ -116,6 +124,12 @@ function BetterLeaderboard.new(stateManager)
     -- _playerConns:     [player] → { conn, ... } conexões POR PLAYER (não no connMgr global)
     self._playerFrames = {}
     self._playerConns  = {}  -- gerenciado manualmente; connMgr cuida apenas de conns globais
+    -- Verification accumulator for periodic client-side verification
+    self._verifyAccumulator = 0
+    self._verifyInterval = CONFIG.VERIFY_INTERVAL
+
+    -- PlayerData instance for consistent getters (no internal timers)
+    self._playerData = PlayerDataModule and PlayerDataModule.new() or nil
 
     return self
 end
@@ -191,6 +205,10 @@ end
 -- ─── Dados de player ──────────────────────────────────────────────────────────
 
 function BetterLeaderboard:_getPlayerPrestige(player)
+    if self._playerData and self._playerData.getPrestigeData then
+        local data = self._playerData:getPrestigeData(player)
+        if data and data.level then return data.level end
+    end
     if utils and utils.getPlayerPrestigeData then
         local data = utils:getPlayerPrestigeData(player)
         if data and data.level then return data.level end
@@ -199,6 +217,10 @@ function BetterLeaderboard:_getPlayerPrestige(player)
 end
 
 function BetterLeaderboard:_getPlayerRogueName(player)
+    if self._playerData and self._playerData.getRogueDisplay then
+        local display = self._playerData:getRogueDisplay(player)
+        if display and #display > 0 then return display end
+    end
     if utils and utils.getPlayerRogueDisplay then
         local display = utils:getPlayerRogueDisplay(player)
         if display and #display > 0 then return display end
@@ -221,8 +243,12 @@ local EDICT_COLOR_MAP = {
 }
 
 function BetterLeaderboard:_getPlayerEdictColor(player)
-    if not (utils and utils.getPlayerEdictData) then return nil end
-    local data = utils:getPlayerEdictData(player)
+    local data = nil
+    if self._playerData and self._playerData.getEdictData then
+        data = self._playerData:getEdictData(player)
+    elseif utils and utils.getPlayerEdictData then
+        data = utils:getPlayerEdictData(player)
+    end
     if not data then return nil end
     local display = data.edictDisplay or data.edict
     local key = display and EDICT_COLOR_MAP[display]
@@ -239,6 +265,71 @@ function BetterLeaderboard:_getPlayerLabelColor(player)
     return self:_getPlayerEdictColor(player) or CONFIG.COLORS.WHITE
 end
 
+-- Sync local display values into StateManager maps (uses UserId keys to avoid leakage)
+function BetterLeaderboard:_updateStateMaps(player, edictDisplay, prestigeLevel)
+    if not self.stateManager then return end
+    if not player or not player.UserId then return end
+    local uid = tostring(player.UserId)
+
+    -- playerEdicts map
+    local edicts = self.stateManager:getModuleData("BetterLeaderboard", "playerEdicts") or {}
+    if edictDisplay == nil then edictDisplay = "" end
+    if edicts[uid] ~= edictDisplay then
+        edicts[uid] = edictDisplay
+        self.stateManager:setModuleData("BetterLeaderboard", "playerEdicts", edicts)
+    end
+
+    -- playerPrestigeLevels map
+    local prestiges = self.stateManager:getModuleData("BetterLeaderboard", "playerPrestigeLevels") or {}
+    prestigeLevel = prestigeLevel or 0
+    if prestiges[uid] ~= prestigeLevel then
+        prestiges[uid] = prestigeLevel
+        self.stateManager:setModuleData("BetterLeaderboard", "playerPrestigeLevels", prestiges)
+    end
+end
+
+-- Periodic verification: compare utils data and UI attributes against StateManager; correct if mismatch
+function BetterLeaderboard:_verifyAndSync()
+    if not utils or not self.stateManager then return end
+    for _, player in ipairs(Players:GetPlayers()) do
+        local uid = tostring(player.UserId)
+        local edict = nil
+        local prestige = nil
+        if self._playerData and self._playerData.getEdictData then
+            local data = self._playerData:getEdictData(player)
+            edict = (data and (data.edictDisplay or data.edict)) or ""
+        elseif utils and utils.getPlayerEdictData then
+            local data = utils:getPlayerEdictData(player)
+            edict = (data and (data.edictDisplay or data.edict)) or ""
+        end
+        if self._playerData and self._playerData.getPrestigeData then
+            local p = self._playerData:getPrestigeData(player)
+            prestige = (p and p.level) or 0
+        elseif utils and utils.getPlayerPrestigeData then
+            local p = utils:getPlayerPrestigeData(player)
+            prestige = (p and p.level) or 0
+        end
+
+        -- compare with stateManager
+        local edicts = self.stateManager:getModuleData("BetterLeaderboard", "playerEdicts") or {}
+        local prestiges = self.stateManager:getModuleData("BetterLeaderboard", "playerPrestigeLevels") or {}
+
+        if edicts[uid] ~= (edict or "") or prestiges[uid] ~= (prestige or 0) then
+            -- update maps and trigger event
+            self:_updateStateMaps(player, edict, prestige)
+            -- update UI attributes if present
+            local frame = self._playerFrames[player]
+            if frame and frame.Parent then
+                local label = frame:FindFirstChild("PlayerLabel")
+                if label and label:IsA("TextButton") then
+                    label:SetAttribute("RogueDisplay", edict or "")
+                    label.Text = (edict and #edict > 0) and edict or label.Text
+                end
+            end
+        end
+    end
+end
+
 -- ─── Update de cores (cache de frames para evitar GetChildren()) ──────────────
 
 function BetterLeaderboard:_updateAllLabelsColor()
@@ -251,6 +342,13 @@ function BetterLeaderboard:_updateAllLabelsColor()
                 local text = (rogueDisplay and rogueDisplay ~= "") and rogueDisplay or "Carregando..."
                 label.Text       = text
                 label.TextColor3 = self:_getPlayerLabelColor(player)
+
+                -- Update editor/state maps so other modules can react
+                local edictDisplay = rogueDisplay or ""
+                local prestige = self:_getPlayerPrestige(player)
+                pcall(function()
+                    self:_updateStateMaps(player, edictDisplay, prestige)
+                end)
 
                 local indicator = frame:FindFirstChild("ObservedIndicator")
                 if indicator then
@@ -558,6 +656,45 @@ function BetterLeaderboard:addPlayerFrame(player)
         extraConns[#extraConns+1] = waitConn
     end
 
+    -- Reactive updates using PlayerData when available
+    local function onPlayerDataChanged()
+        -- recalc edict and prestige and sync to StateManager / UI
+        local ed = nil
+        local pr = nil
+        if self._playerData and self._playerData.getEdictData then
+            local edd = self._playerData:getEdictData(player)
+            ed = edd and (edd.edictDisplay or edd.edict) or ""
+        elseif utils and utils.getPlayerEdictData then
+            local edd = utils:getPlayerEdictData(player)
+            ed = edd and (edd.edictDisplay or edd.edict) or ""
+        end
+        if self._playerData and self._playerData.getPrestigeData then
+            local pd = self._playerData:getPrestigeData(player)
+            pr = pd and pd.level or 0
+        elseif utils and utils.getPlayerPrestigeData then
+            local pd = utils:getPlayerPrestigeData(player)
+            pr = pd and pd.level or 0
+        end
+        pcall(function()
+            self:_updateStateMaps(player, ed or "", pr or 0)
+            self:_updateAllLabelsColor()
+        end)
+    end
+
+    -- Listen to Edict attribute changes
+    local edAttrConn = player:GetAttributeChangedSignal("Edict"):Connect(onPlayerDataChanged)
+    extraConns[#extraConns+1] = edAttrConn
+
+    -- Listen to Prestige leaderstat changes if present
+    local ls = player:FindFirstChild("leaderstats")
+    if ls then
+        local prest = ls:FindFirstChild("Prestige")
+        if prest then
+            local prestConn = prest:GetPropertyChangedSignal("Value"):Connect(onPlayerDataChanged)
+            extraConns[#extraConns+1] = prestConn
+        end
+    end
+
     -- FIX: todas as conns do player em _playerConns — sem double tracking no connMgr
     local allConns = {}
     for _, c in ipairs(labelConns)  do allConns[#allConns+1] = c end
@@ -635,6 +772,16 @@ function BetterLeaderboard:enable()
         end),
         "Players.PlayerRemoving"
     )
+
+    -- Periodic client-side verification to catch local changes and sync to StateManager
+    local verifyConn = RunService.Heartbeat:Connect(function(dt)
+        self._verifyAccumulator = (self._verifyAccumulator or 0) + dt
+        if self._verifyAccumulator >= (self._verifyInterval or CONFIG.VERIFY_INTERVAL) then
+            self._verifyAccumulator = 0
+            pcall(function() self:_verifyAndSync() end)
+        end
+    end)
+    self._connMgr:add(verifyConn, "Verify.Heartbeat")
 end
 
 function BetterLeaderboard:disable()
