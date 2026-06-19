@@ -1,0 +1,203 @@
+-- Observers.lua
+-- Módulo genérico para observar objetos (Instances/Players/Values) de forma
+-- eficiente: várias chamadas de observação sobre o MESMO sinal (mesma
+-- propriedade/atributo/objeto) compartilham UMA única conexão real, em vez
+-- de criar uma RBXScriptConnection por callback.
+--
+-- Isso resolve o padrão visto no BetterLeaderboard, onde cada player frame
+-- abria várias conexões manuais (attribute changed, backpack child added/
+-- removed, leaderstats changed) que precisavam ser rastreadas e limpas à
+-- mão. Com Observers, o registro e a limpeza ficam centralizados.
+
+local Observers = {}
+Observers.__index = Observers
+
+local function makeKey(kind, object, prop)
+    return kind .. "::" .. tostring(object) .. "::" .. tostring(prop or "")
+end
+
+function Observers.new()
+    local self = setmetatable({}, Observers)
+    -- _signals[key] = { conn = RBXScriptConnection, callbacks = { [id] = fn } }
+    self._signals = {}
+    self._nextId  = 0
+    -- _byObject[object] = { [id] = key }  -> permite remoção em lote por objeto
+    self._byObject = {}
+    return self
+end
+
+local function nextId(self)
+    self._nextId = self._nextId + 1
+    return self._nextId
+end
+
+-- Garante que existe uma única conexão real para `key`; cria sob demanda.
+function Observers:_ensureSignal(key, connectFn)
+    local entry = self._signals[key]
+    if entry then return entry end
+
+    entry = { callbacks = {} }
+    entry.conn = connectFn(function(...)
+        for _, fn in pairs(entry.callbacks) do
+            local ok, err = pcall(fn, ...)
+            if not ok then
+                warn("[Observers] erro em callback:", err)
+            end
+        end
+    end)
+    self._signals[key] = entry
+    return entry
+end
+
+function Observers:_track(object, id, key)
+    local map = self._byObject[object]
+    if not map then
+        map = {}
+        self._byObject[object] = map
+    end
+    map[id] = key
+end
+
+-- Todos os métodos `observeX` abaixo aceitam um `owner` opcional (último
+-- argumento). `owner` é apenas a CHAVE de agrupamento usada por
+-- `removeAllFor` — útil quando o sinal real está em um objeto FILHO
+-- (ex.: a Backpack ou o leaderstats.Prestige de um player), mas você quer
+-- limpar tudo de uma vez pela referência do `player`. Se omitido, o próprio
+-- `object` observado é usado como chave (comportamento padrão).
+
+-- Observa mudança de propriedade (ex.: leaderstats.Prestige "Value")
+function Observers:observeProperty(object, propName, callback, owner)
+    local key = makeKey("prop", object, propName)
+    local entry = self:_ensureSignal(key, function(dispatch)
+        return object:GetPropertyChangedSignal(propName):Connect(dispatch)
+    end)
+    local id = nextId(self)
+    entry.callbacks[id] = callback
+    self:_track(owner or object, id, key)
+    return id
+end
+
+-- Observa mudança de atributo (ex.: "MaxEdict", "Edict")
+function Observers:observeAttribute(object, attrName, callback, owner)
+    local key = makeKey("attr", object, attrName)
+    local entry = self:_ensureSignal(key, function(dispatch)
+        return object:GetAttributeChangedSignal(attrName):Connect(dispatch)
+    end)
+    local id = nextId(self)
+    entry.callbacks[id] = callback
+    self:_track(owner or object, id, key)
+    return id
+end
+
+-- Observa filhos adicionados (ex.: Backpack.ChildAdded)
+function Observers:observeChildAdded(object, callback, owner)
+    local key = makeKey("childAdded", object)
+    local entry = self:_ensureSignal(key, function(dispatch)
+        return object.ChildAdded:Connect(dispatch)
+    end)
+    local id = nextId(self)
+    entry.callbacks[id] = callback
+    self:_track(owner or object, id, key)
+    return id
+end
+
+-- Observa filhos removidos (ex.: Backpack.ChildRemoved)
+function Observers:observeChildRemoved(object, callback, owner)
+    local key = makeKey("childRemoved", object)
+    local entry = self:_ensureSignal(key, function(dispatch)
+        return object.ChildRemoved:Connect(dispatch)
+    end)
+    local id = nextId(self)
+    entry.callbacks[id] = callback
+    self:_track(owner or object, id, key)
+    return id
+end
+
+-- Observa qualquer RBXScriptSignal nomeado do objeto (ex.: "MouseEnter",
+-- "MouseButton2Click", "CharacterAdded"). Generaliza os casos acima.
+function Observers:observeSignal(object, signalName, callback, owner)
+    local key = makeKey("signal", object, signalName)
+    local entry = self:_ensureSignal(key, function(dispatch)
+        return object[signalName]:Connect(dispatch)
+    end)
+    local id = nextId(self)
+    entry.callbacks[id] = callback
+    self:_track(owner or object, id, key)
+    return id
+end
+
+-- Atalho: espera um filho com `childName` aparecer e dispara `callback` uma vez.
+-- Útil para o caso "Backpack ainda não existe" sem precisar de loop manual
+-- de ChildAdded + remoção própria.
+function Observers:observeChildOnce(object, childName, callback, owner)
+    local existing = object:FindFirstChild(childName)
+    if existing then
+        callback(existing)
+        return nil
+    end
+    local id
+    id = self:observeChildAdded(object, function(child)
+        if child.Name == childName then
+            callback(child)
+            self:remove(id)
+        end
+    end, owner)
+    return id
+end
+
+-- Remove um único observer pelo id retornado em observeX(...)
+function Observers:remove(id)
+    for object, map in pairs(self._byObject) do
+        local key = map[id]
+        if key then
+            map[id] = nil
+            local entry = self._signals[key]
+            if entry then
+                entry.callbacks[id] = nil
+                if next(entry.callbacks) == nil then
+                    if entry.conn and entry.conn.Connected then
+                        entry.conn:Disconnect()
+                    end
+                    self._signals[key] = nil
+                end
+            end
+            if next(map) == nil then
+                self._byObject[object] = nil
+            end
+            return true
+        end
+    end
+    return false
+end
+
+-- Remove todos os observers ligados a um objeto (ex.: no PlayerRemoving)
+function Observers:removeAllFor(object)
+    local map = self._byObject[object]
+    if not map then return end
+    for id, key in pairs(map) do
+        local entry = self._signals[key]
+        if entry then
+            entry.callbacks[id] = nil
+            if next(entry.callbacks) == nil then
+                if entry.conn and entry.conn.Connected then
+                    entry.conn:Disconnect()
+                end
+                self._signals[key] = nil
+            end
+        end
+    end
+    self._byObject[object] = nil
+end
+
+-- Desliga tudo (todas as conexões reais) e zera o estado interno
+function Observers:destroy()
+    for _, entry in pairs(self._signals) do
+        if entry.conn and entry.conn.Connected then
+            entry.conn:Disconnect()
+        end
+    end
+    self._signals  = {}
+    self._byObject = {}
+end
+
+return Observers
