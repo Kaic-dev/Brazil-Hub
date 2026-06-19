@@ -29,9 +29,11 @@ end
 local FFDetector = {}
 FFDetector.__index = FFDetector
 
-function FFDetector.new()
+function FFDetector.new(stateManager)
     local self = setmetatable({}, FFDetector)
 
+    self.stateManager       = stateManager
+    self.moduleName         = "FFHandler"
     self.enabled            = false
     self._connMgr           = ConnectionManager.new()
     self._charConnMgrs      = {}
@@ -235,6 +237,11 @@ end
 function FFDetector:enable()
     if self.enabled then return end
     self.enabled = true
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:enableModule(self.moduleName)
+    end
 
     -- FIX #1 + #2: desconecta Heartbeat e conexões globais ANTES de recriar estado,
     --              eliminando o tick de Heartbeat que poderia acessar estado parcial.
@@ -273,6 +280,11 @@ end
 function FFDetector:disable()
     if not self.enabled then return end
     self.enabled = false
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:disableModule(self.moduleName)
+    end
 
     -- FIX #1: desconecta Heartbeat imediatamente, antes de qualquer limpeza de estado.
     --         Garante que updateBillboards() não dispara mais nenhum tick após disable().
