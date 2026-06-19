@@ -1084,7 +1084,7 @@ function RogueUI:CreateWindow(options)
     screenGui.Name           = "RogueHubGui"
     screenGui.ResetOnSpawn   = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-    screenGui.IgnoreGuiInset = true
+    screenGui.IgnoreGuiInset = false
     screenGui.Parent         = UIParent
     self_Window.Gui          = screenGui
 
