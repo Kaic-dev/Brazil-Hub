@@ -29,8 +29,10 @@ AutoAim.__index = AutoAim
 local deg, acos, random = math.deg, math.acos, math.random
 local Vector3new = Vector3.new
 
-function AutoAim.new()
-    return setmetatable({
+function AutoAim.new(stateManager)
+    local self = setmetatable({
+        stateManager = stateManager,
+        moduleName = "Auto-Aim",
         enabled = false,
         maxRange = 200,
         timeToHit = 0.15,
@@ -47,6 +49,7 @@ function AutoAim.new()
         _mouseX = 0,
         _mouseY = 0,
     }, AutoAim)
+    return self
 end
 
 function AutoAim:setRange(range) self.maxRange = range end
@@ -220,6 +223,11 @@ function AutoAim:enable()
     end
 
     self.enabled = true
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:enableModule(self.moduleName)
+    end
 
     local lastCleanup = tick()
 
@@ -307,6 +315,11 @@ end
 function AutoAim:disable()
     if not self.enabled then return end
     self.enabled = false
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:disableModule(self.moduleName)
+    end
 
     if self._heartbeatConnection then
         self._heartbeatConnection:Disconnect()
