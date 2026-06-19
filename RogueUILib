@@ -41,12 +41,52 @@ local RogueUI = {
         ConfigBackground      = Color3.fromRGB(9,   9,   11),
         ConfigHeaderBg        = Color3.fromRGB(5,   5,   7),
         ConfigSectionBg       = Color3.fromRGB(14,  14,  17),
+        ConflictColor         = Color3.fromRGB(200, 80,  80),
     },
-    Registry  = {},
-    Toggles   = {},
-    Sliders   = {},
-    Dropdowns = {},
+    Registry        = {},
+    Toggles         = {},
+    Sliders         = {},
+    Dropdowns       = {},
+    -- KeybindRegistry: KeyCode.Name → { label=string, toggleData=table }
+    KeybindRegistry = {},
 }
+
+-- ── Keybind registry helpers ──────────────────────────────────────────────────
+-- Registra uma key para um toggle. Retorna o label do conflito (se houver) ou nil.
+local function kbRegister(keyCode, label, toggleData)
+    if not keyCode or keyCode == Enum.KeyCode.Unknown then return nil end
+    local name = keyCode.Name
+    local conflict = RogueUI.KeybindRegistry[name]
+    -- Remove entrada antiga deste toggleData (mudança de key)
+    for k, entry in pairs(RogueUI.KeybindRegistry) do
+        if entry.toggleData == toggleData then
+            RogueUI.KeybindRegistry[k] = nil
+        end
+    end
+    local conflictLabel = nil
+    if conflict and conflict.toggleData ~= toggleData then
+        conflictLabel = conflict.label
+    end
+    RogueUI.KeybindRegistry[name] = { label = label, toggleData = toggleData }
+    return conflictLabel
+end
+
+local function kbUnregister(toggleData)
+    for k, entry in pairs(RogueUI.KeybindRegistry) do
+        if entry.toggleData == toggleData then
+            RogueUI.KeybindRegistry[k] = nil
+        end
+    end
+end
+
+local function kbConflict(keyCode, selfToggleData)
+    if not keyCode or keyCode == Enum.KeyCode.Unknown then return nil end
+    local entry = RogueUI.KeybindRegistry[keyCode.Name]
+    if entry and entry.toggleData ~= selfToggleData then
+        return entry.label
+    end
+    return nil
+end
 
 -- ── Sound pool ────────────────────────────────────────────────────────────────
 local SOUND_POOL_SIZE = 3
@@ -94,6 +134,99 @@ local function makeDraggable(frame, handle, addCleanup)
     addCleanup(UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then update(input) end
     end))
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- KEYBIND SECTION BUILDER (reutilizado por panelAPI:AddToggle e ConfigPanel do groupbox)
+-- toggleData deve ter: .KeybindEnabled, .KeybindKey, .KeybindMode, .Value, .OnChangedCallbacks
+-- label  = nome do toggle para o registry
+-- panelInst = a panelAPI onde adicionar os widgets
+-- setVal = função(bool) que aplica o estado do toggle
+-- addCleanup = função de cleanup da janela
+-- ══════════════════════════════════════════════════════════════════════════════
+local function buildKeybindSection(panelInst, toggleData, label, setVal, addCleanup, theme)
+    panelInst:AddSeparator()
+    panelInst:AddSection("Keybind")
+
+    -- Label de conflito (inicialmente oculto)
+    local conflictRow = panelInst:AddLabel("")
+    -- Hack: acessa o TextLabel interno pela row pai
+    -- AddLabel retorna api com SetText, então usamos direto
+    local function updateConflictLabel(keyCode)
+        if not keyCode or keyCode == Enum.KeyCode.Unknown then
+            conflictRow:SetText("")
+            return
+        end
+        local c = kbConflict(keyCode, toggleData)
+        if c then
+            conflictRow:SetText("⚠ Conflito: " .. c)
+        else
+            conflictRow:SetText("")
+        end
+    end
+
+    -- ModeSelect: Ativo / Inativo
+    local kbEnabled = panelInst:AddModeSelect(
+        "Status", {"Ativo", "Inativo"},
+        toggleData.KeybindEnabled and 1 or 2,
+        function(idx)
+            toggleData.KeybindEnabled = (idx == 1)
+            if not toggleData.KeybindEnabled then
+                kbUnregister(toggleData)
+            else
+                if toggleData.KeybindKey and toggleData.KeybindKey ~= Enum.KeyCode.Unknown then
+                    kbRegister(toggleData.KeybindKey, label, toggleData)
+                end
+            end
+            updateConflictLabel(toggleData.KeybindEnabled and toggleData.KeybindKey or nil)
+            if toggleData._refreshBadge then toggleData._refreshBadge() end
+        end)
+
+    -- Keybind picker
+    panelInst:AddKeybind(
+        "Tecla",
+        toggleData.KeybindKey or Enum.KeyCode.Unknown,
+        function(newKey)
+            local conflict = kbRegister(newKey, label, toggleData)
+            toggleData.KeybindKey     = newKey
+            toggleData.KeybindEnabled = true
+            kbEnabled:SetIndex(1)
+            updateConflictLabel(newKey)
+            if toggleData._refreshBadge then toggleData._refreshBadge() end
+        end)
+
+    -- ModeSelect: Toggle / Hold
+    local defaultModeIdx = (toggleData.KeybindMode == "Hold") and 2 or 1
+    panelInst:AddModeSelect(
+        "Modo", {"Toggle", "Hold"}, defaultModeIdx,
+        function(_, val)
+            toggleData.KeybindMode = val
+        end)
+
+    -- Registrar keybind global (InputBegan)
+    addCleanup(UserInputService.InputBegan:Connect(function(input)
+        if UserInputService:GetFocusedTextBox() then return end
+        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if input.KeyCode ~= toggleData.KeybindKey then return end
+        if toggleData.KeybindMode == "Toggle" then
+            setVal(not toggleData.Value)
+        elseif toggleData.KeybindMode == "Hold" then
+            setVal(true)
+        end
+    end))
+    addCleanup(UserInputService.InputEnded:Connect(function(input)
+        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
+        if toggleData.KeybindMode ~= "Hold" then return end
+        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        if input.KeyCode ~= toggleData.KeybindKey then return end
+        setVal(false)
+    end))
+
+    -- Inicializar aviso de conflito com key atual
+    updateConflictLabel(toggleData.KeybindEnabled and toggleData.KeybindKey or nil)
+
+    return kbEnabled
 end
 
 -- ══════════════════════════════════════════════════════════════════════════════
@@ -417,10 +550,20 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         local callbacks = {}
         if cb then table.insert(callbacks, cb) end
 
+        -- toggleData interno para o registry de keybind
+        local toggleData = {
+            Value          = value,
+            KeybindEnabled = false,
+            KeybindKey     = nil,
+            KeybindMode    = "Toggle",
+            _refreshBadge  = nil,
+        }
+
         local function setVal(state)
-            value           = state
-            mark.Visible    = state
-            bStroke.Color   = state and theme.BorderColor or theme.BorderInactive
+            value              = state
+            toggleData.Value   = state
+            mark.Visible       = state
+            bStroke.Color      = state and theme.BorderColor or theme.BorderInactive
             for _,fn in ipairs(callbacks) do task.spawn(fn, state) end
         end
 
@@ -432,6 +575,17 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         box.MouseLeave:Connect(function()
             if not value then bStroke.Color = theme.BorderInactive end
         end)
+
+        -- Seção Keybind automática no próprio painel que contém este toggle
+        -- (injetada uma única vez, na primeira chamada)
+        local _kbBuilt = false
+        local function ensureKeybindSection()
+            if _kbBuilt then return end
+            _kbBuilt = true
+            buildKeybindSection(panelAPI, toggleData, labelText ~= "" and labelText or "Toggle", setVal, addCleanup, theme)
+        end
+        -- Construir imediatamente para que apareça logo abaixo do toggle
+        ensureKeybindSection()
 
         local api = { Value = value }
         function api:SetValue(v) setVal(v); self.Value = v end
@@ -1324,12 +1478,17 @@ function RogueUI:CreateWindow(options)
                 local toggleData = {
                     Value              = default,
                     OnChangedCallbacks = { cb },
-                    KeybindEnabled     = hasKeybind and (defKey~=nil),
+                    KeybindEnabled     = hasKeybind and (defKey ~= nil),
                     KeybindKey         = defKey or nil,
                     KeybindMode        = "Toggle",
                     _configPanel       = nil,
                 }
                 RogueUI.Toggles[id] = toggleData
+
+                -- Registrar keybind inicial no registry se houver
+                if defKey then
+                    kbRegister(defKey, text, toggleData)
+                end
 
                 local tFrame = Instance.new("Frame")
                 tFrame.Name               = id.."Toggle"
@@ -1360,10 +1519,10 @@ function RogueUI:CreateWindow(options)
                 mark.Visible            = default
                 mark.Parent             = box
 
-                local lblRPad = hasKeybind and -52 or -20
+                -- Badge de keybind: sempre presente (começa com "–" se não tiver key)
                 local lbl = Instance.new("TextButton")
                 lbl.Name               = "Label"
-                lbl.Size               = UDim2.new(1,lblRPad,1,0)
+                lbl.Size               = UDim2.new(1,-52,1,0)
                 lbl.Position           = UDim2.new(0,22,0,0)
                 lbl.BackgroundTransparency = 1
                 lbl.Text               = text
@@ -1374,46 +1533,38 @@ function RogueUI:CreateWindow(options)
                 lbl.TextXAlignment     = Enum.TextXAlignment.Left
                 lbl.Parent             = tFrame
 
-                local kbBadge, kbBadgeStroke
-                if hasKeybind then
-                    kbBadge = Instance.new("TextButton")
-                    kbBadge.Size             = UDim2.new(0,30,0,12)
-                    kbBadge.AnchorPoint      = Vector2.new(1,0.5)
-                    kbBadge.Position         = UDim2.new(1,-18,0.5,0)
-                    kbBadge.BackgroundColor3 = RogueUI.Theme.MainBackground
-                    kbBadge.BorderSizePixel  = 0
-                    kbBadge.Font             = Enum.Font.Garamond
-                    kbBadge.TextSize         = 10
-                    kbBadge.ZIndex           = 11
-                    kbBadge.Parent           = tFrame
+                local kbBadge = Instance.new("TextButton")
+                kbBadge.Size             = UDim2.new(0,30,0,12)
+                kbBadge.AnchorPoint      = Vector2.new(1,0.5)
+                kbBadge.Position         = UDim2.new(1,-18,0.5,0)
+                kbBadge.BackgroundColor3 = RogueUI.Theme.MainBackground
+                kbBadge.BorderSizePixel  = 0
+                kbBadge.Font             = Enum.Font.Garamond
+                kbBadge.TextSize         = 10
+                kbBadge.ZIndex           = 11
+                kbBadge.Parent           = tFrame
 
-                    kbBadgeStroke = Instance.new("UIStroke")
-                    kbBadgeStroke.Thickness = 1
-                    kbBadgeStroke.Color     = RogueUI.Theme.BorderInactive
-                    kbBadgeStroke.Parent    = kbBadge
-
-                    if defKey then
-                        toggleData.KeybindKey     = defKey
-                        toggleData.KeybindEnabled = true
-                    end
-                end
+                local kbBadgeStroke = Instance.new("UIStroke")
+                kbBadgeStroke.Thickness = 1
+                kbBadgeStroke.Color     = RogueUI.Theme.BorderInactive
+                kbBadgeStroke.Parent    = kbBadge
 
                 local function refreshBadge()
-                    if not kbBadge then return end
-                    if toggleData.KeybindEnabled and toggleData.KeybindKey then
+                    if toggleData.KeybindEnabled and toggleData.KeybindKey
+                    and toggleData.KeybindKey ~= Enum.KeyCode.Unknown then
                         local kn = typeof(toggleData.KeybindKey)=="EnumItem"
                                    and toggleData.KeybindKey.Name
                                    or tostring(toggleData.KeybindKey)
-                        kbBadge.Text      = kn
-                        kbBadge.TextColor3 = RogueUI.Theme.TextActive
+                        kbBadge.Text        = kn
+                        kbBadge.TextColor3  = RogueUI.Theme.TextActive
                         kbBadgeStroke.Color = RogueUI.Theme.BorderColor
                     else
-                        kbBadge.Text       = "–"
-                        kbBadge.TextColor3 = RogueUI.Theme.TextMuted
+                        kbBadge.Text        = "–"
+                        kbBadge.TextColor3  = RogueUI.Theme.TextMuted
                         kbBadgeStroke.Color = RogueUI.Theme.BorderInactive
                     end
                 end
-                if hasKeybind then refreshBadge() end
+                refreshBadge()
                 toggleData._refreshBadge = refreshBadge
 
                 local function setVal(state)
@@ -1422,24 +1573,6 @@ function RogueUI:CreateWindow(options)
                     lbl.TextColor3    = state and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
                     bStroke.Color     = state and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                     for _,fn in ipairs(toggleData.OnChangedCallbacks) do task.spawn(fn,state) end
-                end
-
-                if hasKeybind then
-                    addCleanup(UserInputService.InputBegan:Connect(function(input)
-                        if UserInputService:GetFocusedTextBox() then return end
-                        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
-                        if input.UserInputType~=Enum.UserInputType.Keyboard then return end
-                        if input.KeyCode~=toggleData.KeybindKey then return end
-                        if toggleData.KeybindMode=="Toggle" then setVal(not toggleData.Value)
-                        elseif toggleData.KeybindMode=="Hold" then setVal(true) end
-                    end))
-                    addCleanup(UserInputService.InputEnded:Connect(function(input)
-                        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
-                        if toggleData.KeybindMode~="Hold" then return end
-                        if input.UserInputType~=Enum.UserInputType.Keyboard then return end
-                        if input.KeyCode~=toggleData.KeybindKey then return end
-                        setVal(false)
-                    end))
                 end
 
                 local function fire() playClick(); setVal(not toggleData.Value) end
@@ -1474,11 +1607,10 @@ function RogueUI:CreateWindow(options)
 
                     local gear = makeGearBtn(tFrame, RogueUI.Theme)
 
-                    if kbBadge then
-                        kbBadge.MouseButton1Click:Connect(function()
-                            if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
-                        end)
-                    end
+                    -- Badge abre/fecha o painel
+                    kbBadge.MouseButton1Click:Connect(function()
+                        if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
+                    end)
 
                     panelInst = createRichConfigPanel(
                         screenGui, tFrame, text, RogueUI.Theme, addCleanup)
@@ -1488,37 +1620,15 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
+                    -- Seção Estado
                     panelInst:AddSection("Estado")
                     local stToggle = panelInst:AddToggle("Ativado", default, function(v) setVal(v) end)
                     table.insert(toggleData.OnChangedCallbacks, function(v) stToggle:SetValue(v) end)
 
-                    if hasKeybind then
-                        panelInst:AddSeparator()
-                        panelInst:AddSection("Keybind")
+                    -- Seção Keybind — sempre, via helper central
+                    buildKeybindSection(panelInst, toggleData, text, setVal, addCleanup, RogueUI.Theme)
 
-                        local kbEnabled = panelInst:AddModeSelect(
-                            "Status", {"Ativo","Inativo"},
-                            toggleData.KeybindEnabled and 1 or 2,
-                            function(idx)
-                                toggleData.KeybindEnabled = (idx==1)
-                                refreshBadge()
-                            end)
-
-                        panelInst:AddKeybind(
-                            "Tecla",
-                            toggleData.KeybindKey or Enum.KeyCode.Unknown,
-                            function(newKey)
-                                toggleData.KeybindKey     = newKey
-                                toggleData.KeybindEnabled = true
-                                kbEnabled:SetIndex(1)
-                                refreshBadge()
-                            end)
-
-                        panelInst:AddModeSelect(
-                            "Modo", {"Toggle","Hold"}, 1,
-                            function(_,val) toggleData.KeybindMode=val end)
-                    end
-
+                    -- Builder do CoreManager
                     if type(builderFn)=="function" then
                         panelInst:AddSeparator()
                         builderFn(panelInst)
