@@ -41,52 +41,12 @@ local RogueUI = {
         ConfigBackground      = Color3.fromRGB(9,   9,   11),
         ConfigHeaderBg        = Color3.fromRGB(5,   5,   7),
         ConfigSectionBg       = Color3.fromRGB(14,  14,  17),
-        ConflictColor         = Color3.fromRGB(200, 80,  80),
     },
-    Registry        = {},
-    Toggles         = {},
-    Sliders         = {},
-    Dropdowns       = {},
-    -- KeybindRegistry: KeyCode.Name → { label=string, toggleData=table }
-    KeybindRegistry = {},
+    Registry  = {},
+    Toggles   = {},
+    Sliders   = {},
+    Dropdowns = {},
 }
-
--- ── Keybind registry helpers ──────────────────────────────────────────────────
--- Registra uma key para um toggle. Retorna o label do conflito (se houver) ou nil.
-local function kbRegister(keyCode, label, toggleData)
-    if not keyCode or keyCode == Enum.KeyCode.Unknown then return nil end
-    local name = keyCode.Name
-    local conflict = RogueUI.KeybindRegistry[name]
-    -- Remove entrada antiga deste toggleData (mudança de key)
-    for k, entry in pairs(RogueUI.KeybindRegistry) do
-        if entry.toggleData == toggleData then
-            RogueUI.KeybindRegistry[k] = nil
-        end
-    end
-    local conflictLabel = nil
-    if conflict and conflict.toggleData ~= toggleData then
-        conflictLabel = conflict.label
-    end
-    RogueUI.KeybindRegistry[name] = { label = label, toggleData = toggleData }
-    return conflictLabel
-end
-
-local function kbUnregister(toggleData)
-    for k, entry in pairs(RogueUI.KeybindRegistry) do
-        if entry.toggleData == toggleData then
-            RogueUI.KeybindRegistry[k] = nil
-        end
-    end
-end
-
-local function kbConflict(keyCode, selfToggleData)
-    if not keyCode or keyCode == Enum.KeyCode.Unknown then return nil end
-    local entry = RogueUI.KeybindRegistry[keyCode.Name]
-    if entry and entry.toggleData ~= selfToggleData then
-        return entry.label
-    end
-    return nil
-end
 
 -- ── Sound pool ────────────────────────────────────────────────────────────────
 local SOUND_POOL_SIZE = 3
@@ -134,99 +94,6 @@ local function makeDraggable(frame, handle, addCleanup)
     addCleanup(UserInputService.InputChanged:Connect(function(input)
         if input == dragInput and dragging then update(input) end
     end))
-end
-
--- ══════════════════════════════════════════════════════════════════════════════
--- KEYBIND SECTION BUILDER (reutilizado por panelAPI:AddToggle e ConfigPanel do groupbox)
--- toggleData deve ter: .KeybindEnabled, .KeybindKey, .KeybindMode, .Value, .OnChangedCallbacks
--- label  = nome do toggle para o registry
--- panelInst = a panelAPI onde adicionar os widgets
--- setVal = função(bool) que aplica o estado do toggle
--- addCleanup = função de cleanup da janela
--- ══════════════════════════════════════════════════════════════════════════════
-local function buildKeybindSection(panelInst, toggleData, label, setVal, addCleanup, theme)
-    panelInst:AddSeparator()
-    panelInst:AddSection("Keybind")
-
-    -- Label de conflito (inicialmente oculto)
-    local conflictRow = panelInst:AddLabel("")
-    -- Hack: acessa o TextLabel interno pela row pai
-    -- AddLabel retorna api com SetText, então usamos direto
-    local function updateConflictLabel(keyCode)
-        if not keyCode or keyCode == Enum.KeyCode.Unknown then
-            conflictRow:SetText("")
-            return
-        end
-        local c = kbConflict(keyCode, toggleData)
-        if c then
-            conflictRow:SetText("⚠ Conflito: " .. c)
-        else
-            conflictRow:SetText("")
-        end
-    end
-
-    -- ModeSelect: Ativo / Inativo
-    local kbEnabled = panelInst:AddModeSelect(
-        "Status", {"Ativo", "Inativo"},
-        toggleData.KeybindEnabled and 1 or 2,
-        function(idx)
-            toggleData.KeybindEnabled = (idx == 1)
-            if not toggleData.KeybindEnabled then
-                kbUnregister(toggleData)
-            else
-                if toggleData.KeybindKey and toggleData.KeybindKey ~= Enum.KeyCode.Unknown then
-                    kbRegister(toggleData.KeybindKey, label, toggleData)
-                end
-            end
-            updateConflictLabel(toggleData.KeybindEnabled and toggleData.KeybindKey or nil)
-            if toggleData._refreshBadge then toggleData._refreshBadge() end
-        end)
-
-    -- Keybind picker
-    panelInst:AddKeybind(
-        "Tecla",
-        toggleData.KeybindKey or Enum.KeyCode.Unknown,
-        function(newKey)
-            local conflict = kbRegister(newKey, label, toggleData)
-            toggleData.KeybindKey     = newKey
-            toggleData.KeybindEnabled = true
-            kbEnabled:SetIndex(1)
-            updateConflictLabel(newKey)
-            if toggleData._refreshBadge then toggleData._refreshBadge() end
-        end)
-
-    -- ModeSelect: Toggle / Hold
-    local defaultModeIdx = (toggleData.KeybindMode == "Hold") and 2 or 1
-    panelInst:AddModeSelect(
-        "Modo", {"Toggle", "Hold"}, defaultModeIdx,
-        function(_, val)
-            toggleData.KeybindMode = val
-        end)
-
-    -- Registrar keybind global (InputBegan)
-    addCleanup(UserInputService.InputBegan:Connect(function(input)
-        if UserInputService:GetFocusedTextBox() then return end
-        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
-        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-        if input.KeyCode ~= toggleData.KeybindKey then return end
-        if toggleData.KeybindMode == "Toggle" then
-            setVal(not toggleData.Value)
-        elseif toggleData.KeybindMode == "Hold" then
-            setVal(true)
-        end
-    end))
-    addCleanup(UserInputService.InputEnded:Connect(function(input)
-        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
-        if toggleData.KeybindMode ~= "Hold" then return end
-        if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-        if input.KeyCode ~= toggleData.KeybindKey then return end
-        setVal(false)
-    end))
-
-    -- Inicializar aviso de conflito com key atual
-    updateConflictLabel(toggleData.KeybindEnabled and toggleData.KeybindKey or nil)
-
-    return kbEnabled
 end
 
 -- ══════════════════════════════════════════════════════════════════════════════
@@ -326,7 +193,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     contentPad.Parent        = scroll
 
     local open           = false
-    local sliderDragging = false
+    local sliderDragging = false  -- impede fechamento ao arrastar sliders
     local activeSubMenu  = nil
     local activeSubMenuFrame = nil
 
@@ -398,16 +265,19 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             if sliderDragging then return end
 
             local rawPos = input.Position
+            print("[PANEL-DEBUG] InputBegan triggered for panel:", titleText, "rawPos:", rawPos)
             task.defer(function()
                 if not open then return end
-                if sliderDragging then return end  -- FIX: re-checar após defer (submenus podem ter setado)
 
                 local mp = Vector2.new(rawPos.X, rawPos.Y)
+                local mLoc = UserInputService:GetMouseLocation()
 
+                -- Check if click is inside the panel itself
                 local pp = panel.AbsolutePosition
                 local ps = panel.AbsoluteSize
                 local inPanel = mp.X >= pp.X and mp.X <= pp.X + ps.X and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y
 
+                -- Check if click is inside the active sub-menu (dropdown overlay or color picker)
                 local inSub = false
                 if activeSubMenuFrame and activeSubMenuFrame.Visible then
                     local sp = activeSubMenuFrame.AbsolutePosition
@@ -415,11 +285,20 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                     inSub = mp.X >= sp.X and mp.X <= sp.X + ss.X and mp.Y >= sp.Y and mp.Y <= sp.Y + ss.Y
                 end
 
+                -- Check if click is on the anchor (gear button)
                 local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
                 local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
                 local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
 
-                if inPanel or inSub or inAnchor then return end
+                print(string.format("[PANEL-DEBUG] panel=%s, mp=%s, mLoc=%s, inPanel=%s, inSub=%s, inAnchor=%s, panelPos=%s, panelSize=%s",
+                    tostring(titleText), tostring(mp), tostring(mLoc), tostring(inPanel), tostring(inSub), tostring(inAnchor), tostring(pp), tostring(ps)))
+
+                if inPanel or inSub or inAnchor then
+                    print("[PANEL-DEBUG] Keeping panel open")
+                    return
+                end
+
+                print("[PANEL-DEBUG] Closing panel since click outside")
                 closePanel()
             end)
         end))
@@ -550,20 +429,10 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         local callbacks = {}
         if cb then table.insert(callbacks, cb) end
 
-        -- toggleData interno para o registry de keybind
-        local toggleData = {
-            Value          = value,
-            KeybindEnabled = false,
-            KeybindKey     = nil,
-            KeybindMode    = "Toggle",
-            _refreshBadge  = nil,
-        }
-
         local function setVal(state)
-            value              = state
-            toggleData.Value   = state
-            mark.Visible       = state
-            bStroke.Color      = state and theme.BorderColor or theme.BorderInactive
+            value           = state
+            mark.Visible    = state
+            bStroke.Color   = state and theme.BorderColor or theme.BorderInactive
             for _,fn in ipairs(callbacks) do task.spawn(fn, state) end
         end
 
@@ -575,17 +444,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         box.MouseLeave:Connect(function()
             if not value then bStroke.Color = theme.BorderInactive end
         end)
-
-        -- Seção Keybind automática no próprio painel que contém este toggle
-        -- (injetada uma única vez, na primeira chamada)
-        local _kbBuilt = false
-        local function ensureKeybindSection()
-            if _kbBuilt then return end
-            _kbBuilt = true
-            buildKeybindSection(panelAPI, toggleData, labelText ~= "" and labelText or "Toggle", setVal, addCleanup, theme)
-        end
-        -- Construir imediatamente para que apareça logo abaixo do toggle
-        ensureKeybindSection()
 
         local api = { Value = value }
         function api:SetValue(v) setVal(v); self.Value = v end
@@ -767,9 +625,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             if activeSubMenu == collapseGrid then
                 activeSubMenu = nil
             end
-            -- FIX: bloqueia o defer do painel de fechar o painel ao clicar numa cor
-            sliderDragging = true
-            task.defer(function() sliderDragging = false end)
         end
 
         local function expandGrid()
@@ -823,6 +678,9 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     end
 
     function panelAPI:AddDropdown(labelText, valuesOrOpts, multi, default, cb)
+        -- Support both calling styles:
+        -- 1) Positional:  AddDropdown("label", valuesArray, multi, default, cb)
+        -- 2) Table:       AddDropdown("label", { Values=..., Multi=..., Default=..., Callback=..., Text=... })
         local values = valuesOrOpts
         if type(valuesOrOpts) == "table" and valuesOrOpts.Values then
             values  = valuesOrOpts.Values
@@ -846,6 +704,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         lbl.TextXAlignment     = Enum.TextXAlignment.Left
         lbl.ZIndex             = PANEL_ZIDX+3
         lbl.Parent             = row
+
 
         local selected = {}
         if multi then
@@ -898,7 +757,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         mScroll.ScrollBarImageColor3 = theme.BorderColor
         mScroll.CanvasSize         = UDim2.new(0,0,0,0)
         mScroll.ZIndex             = PANEL_ZIDX+11
-        mScroll.Active             = false  -- FIX: não interceptar cliques das opções
         mScroll.Parent             = menuFrame
 
         local mLayout = Instance.new("UIListLayout")
@@ -936,9 +794,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 activeSubMenu = nil
                 activeSubMenuFrame = nil
             end
-            -- FIX: bloqueia o defer do painel de fechar o painel ao clicar numa opção
-            sliderDragging = true
-            task.defer(function() sliderDragging = false end)
         end
 
         local function openMenu()
@@ -968,23 +823,43 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 opt.Active           = true
                 opt.Selectable       = true
                 opt.Parent           = mScroll
-                opt.MouseEnter:Connect(function() opt.TextColor3=theme.TextActive; playHover() end)
+                opt.MouseEnter:Connect(function()
+                    print("[DD-DEBUG] MouseEnter on option:", optVal, "label:", labelText)
+                    opt.TextColor3=theme.TextActive; playHover()
+                end)
                 opt.MouseLeave:Connect(function()
+                    print("[DD-DEBUG] MouseLeave on option:", optVal, "label:", labelText)
                     if not selected[optVal] then opt.TextColor3=theme.TextNormal end
                 end)
+                opt.MouseButton1Down:Connect(function()
+                    print("[DD-DEBUG] MouseButton1Down on option:", optVal, "label:", labelText)
+                end)
+                opt.MouseButton1Up:Connect(function()
+                    print("[DD-DEBUG] MouseButton1Up on option:", optVal, "label:", labelText)
+                end)
+                opt.Activated:Connect(function()
+                    print("[DD-DEBUG] Activated on option:", optVal, "label:", labelText)
+                end)
                 opt.MouseButton1Click:Connect(function()
+                    print("[DD-DEBUG] Click! label:", labelText, "opt:", optVal, "multi:", multi)
                     if multi then
                         selected[optVal]=not selected[optVal]
                         opt.TextColor3=selected[optVal] and theme.TextActive or theme.TextNormal
                         btn.Text=displayText(); playClick()
                         local v=getVal()
+                        print("[DD-DEBUG] Multi fire callbacks, count:", #callbacks)
                         for _,fn in ipairs(callbacks) do task.spawn(fn,v) end
                     else
+                        print("[DD-DEBUG] Single-select path for:", optVal)
                         selected={}; selected[optVal]=true
                         btn.Text=tostring(optVal)
+                        print("[DD-DEBUG] btn.Text set to:", btn.Text)
                         closeMenu()
+                        print("[DD-DEBUG] closeMenu done")
                         populateMenu()
+                        print("[DD-DEBUG] populateMenu done, callbacks:", #callbacks)
                         for _,fn in ipairs(callbacks) do task.spawn(fn,optVal) end
+                        print("[DD-DEBUG] callbacks fired")
                     end
                 end)
             end
@@ -1001,6 +876,33 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         end)
 
         if addCleanup then
+            addCleanup(UserInputService.InputBegan:Connect(function(input)
+                if not dropOpen then return end
+                if input.UserInputType~=Enum.UserInputType.MouseButton1
+                and input.UserInputType~=Enum.UserInputType.Touch then return end
+                
+                local rawPos = input.Position
+                print("[DD-DEBUG] InputBegan triggered for:", labelText, "rawPos:", rawPos)
+                -- Defer so MouseButton1Click on options fires first
+                task.defer(function()
+                    if not dropOpen then return end
+                    local mp=Vector2.new(rawPos.X, rawPos.Y)
+                    local mLoc=UserInputService:GetMouseLocation()
+                    local mp2=menuFrame.AbsolutePosition; local ms=menuFrame.AbsoluteSize
+                    local bp2=btn.AbsolutePosition;       local bs2=btn.AbsoluteSize
+                    local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
+                    local inB=mp.X>=bp2.X and mp.X<=bp2.X+bs2.X and mp.Y>=bp2.Y and mp.Y<=bp2.Y+bs2.Y
+                    print(string.format("[DD-DEBUG] label: %s, mp: %s, mLoc: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                        tostring(labelText), tostring(mp), tostring(mLoc), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB),
+                        tostring(menuFrame.Parent and menuFrame.Parent.Name), tostring(menuFrame.Parent and menuFrame.Parent.ClassName), tostring(menuFrame.Position)))
+                    if not inM and not inB then
+                        print("[DD-DEBUG] Closing menu for:", labelText)
+                        closeMenu()
+                    else
+                        print("[DD-DEBUG] Keeping menu open for:", labelText)
+                    end
+                end)
+            end))
             addCleanup(function()
                 closeMenu()
                 if menuFrame then menuFrame:Destroy() end
@@ -1058,7 +960,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             btn.Text        = "["..newKey.Name.."]"
             btn.TextColor3  = theme.TextActive
             bStroke.Color   = theme.BorderInactive
-            if listenConn then listenConn:Disconnect(); listenConn=nil end
+            if listenConn then pcall(function() listenConn:Disconnect() end); listenConn=nil end
             for _,fn in ipairs(callbacks) do task.spawn(fn,newKey) end
         end
 
@@ -1069,6 +971,8 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick(); listening=true
             btn.Text="[...]"; btn.TextColor3=theme.TextNormal
             bStroke.Color=theme.BorderColor
+            -- Conexão temporária: gerenciada manualmente, não passa por addCleanup
+            -- para evitar acúmulo de listeners a cada clique
             listenConn=UserInputService.InputBegan:Connect(function(input)
                 if input.UserInputType==Enum.UserInputType.Keyboard then
                     stopListening(input.KeyCode)
@@ -1163,7 +1067,7 @@ function RogueUI:CreateWindow(options)
         ActiveTab          = nil,
         ToggleKeybind      = { Value = toggleKey },
         CleanupConnections = {},
-        _activeDropdown    = nil,
+        _activeDropdown    = nil,  -- dropdown do groupbox atualmente aberto
     }
 
     local function addCleanup(conn)
@@ -1478,17 +1382,12 @@ function RogueUI:CreateWindow(options)
                 local toggleData = {
                     Value              = default,
                     OnChangedCallbacks = { cb },
-                    KeybindEnabled     = hasKeybind and (defKey ~= nil),
+                    KeybindEnabled     = hasKeybind and (defKey~=nil),
                     KeybindKey         = defKey or nil,
                     KeybindMode        = "Toggle",
                     _configPanel       = nil,
                 }
                 RogueUI.Toggles[id] = toggleData
-
-                -- Registrar keybind inicial no registry se houver
-                if defKey then
-                    kbRegister(defKey, text, toggleData)
-                end
 
                 local tFrame = Instance.new("Frame")
                 tFrame.Name               = id.."Toggle"
@@ -1519,10 +1418,10 @@ function RogueUI:CreateWindow(options)
                 mark.Visible            = default
                 mark.Parent             = box
 
-                -- Badge de keybind: sempre presente (começa com "–" se não tiver key)
+                local lblRPad = hasKeybind and -52 or -20
                 local lbl = Instance.new("TextButton")
                 lbl.Name               = "Label"
-                lbl.Size               = UDim2.new(1,-52,1,0)
+                lbl.Size               = UDim2.new(1,lblRPad,1,0)
                 lbl.Position           = UDim2.new(0,22,0,0)
                 lbl.BackgroundTransparency = 1
                 lbl.Text               = text
@@ -1533,38 +1432,47 @@ function RogueUI:CreateWindow(options)
                 lbl.TextXAlignment     = Enum.TextXAlignment.Left
                 lbl.Parent             = tFrame
 
-                local kbBadge = Instance.new("TextButton")
-                kbBadge.Size             = UDim2.new(0,30,0,12)
-                kbBadge.AnchorPoint      = Vector2.new(1,0.5)
-                kbBadge.Position         = UDim2.new(1,-18,0.5,0)
-                kbBadge.BackgroundColor3 = RogueUI.Theme.MainBackground
-                kbBadge.BorderSizePixel  = 0
-                kbBadge.Font             = Enum.Font.Garamond
-                kbBadge.TextSize         = 10
-                kbBadge.ZIndex           = 11
-                kbBadge.Parent           = tFrame
+                -- Badge de keybind
+                local kbBadge, kbBadgeStroke
+                if hasKeybind then
+                    kbBadge = Instance.new("TextButton")
+                    kbBadge.Size             = UDim2.new(0,30,0,12)
+                    kbBadge.AnchorPoint      = Vector2.new(1,0.5)
+                    kbBadge.Position         = UDim2.new(1,-18,0.5,0)
+                    kbBadge.BackgroundColor3 = RogueUI.Theme.MainBackground
+                    kbBadge.BorderSizePixel  = 0
+                    kbBadge.Font             = Enum.Font.Garamond
+                    kbBadge.TextSize         = 10
+                    kbBadge.ZIndex           = 11
+                    kbBadge.Parent           = tFrame
 
-                local kbBadgeStroke = Instance.new("UIStroke")
-                kbBadgeStroke.Thickness = 1
-                kbBadgeStroke.Color     = RogueUI.Theme.BorderInactive
-                kbBadgeStroke.Parent    = kbBadge
+                    kbBadgeStroke = Instance.new("UIStroke")
+                    kbBadgeStroke.Thickness = 1
+                    kbBadgeStroke.Color     = RogueUI.Theme.BorderInactive
+                    kbBadgeStroke.Parent    = kbBadge
+
+                    if defKey then
+                        toggleData.KeybindKey     = defKey
+                        toggleData.KeybindEnabled = true
+                    end
+                end
 
                 local function refreshBadge()
-                    if toggleData.KeybindEnabled and toggleData.KeybindKey
-                    and toggleData.KeybindKey ~= Enum.KeyCode.Unknown then
+                    if not kbBadge then return end
+                    if toggleData.KeybindEnabled and toggleData.KeybindKey then
                         local kn = typeof(toggleData.KeybindKey)=="EnumItem"
                                    and toggleData.KeybindKey.Name
                                    or tostring(toggleData.KeybindKey)
-                        kbBadge.Text        = kn
-                        kbBadge.TextColor3  = RogueUI.Theme.TextActive
+                        kbBadge.Text      = kn
+                        kbBadge.TextColor3 = RogueUI.Theme.TextActive
                         kbBadgeStroke.Color = RogueUI.Theme.BorderColor
                     else
-                        kbBadge.Text        = "–"
-                        kbBadge.TextColor3  = RogueUI.Theme.TextMuted
+                        kbBadge.Text       = "–"
+                        kbBadge.TextColor3 = RogueUI.Theme.TextMuted
                         kbBadgeStroke.Color = RogueUI.Theme.BorderInactive
                     end
                 end
-                refreshBadge()
+                if hasKeybind then refreshBadge() end
                 toggleData._refreshBadge = refreshBadge
 
                 local function setVal(state)
@@ -1573,6 +1481,24 @@ function RogueUI:CreateWindow(options)
                     lbl.TextColor3    = state and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
                     bStroke.Color     = state and RogueUI.Theme.BorderColor or RogueUI.Theme.BorderInactive
                     for _,fn in ipairs(toggleData.OnChangedCallbacks) do task.spawn(fn,state) end
+                end
+
+                if hasKeybind then
+                    addCleanup(UserInputService.InputBegan:Connect(function(input)
+                        if UserInputService:GetFocusedTextBox() then return end
+                        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
+                        if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+                        if input.KeyCode~=toggleData.KeybindKey then return end
+                        if toggleData.KeybindMode=="Toggle" then setVal(not toggleData.Value)
+                        elseif toggleData.KeybindMode=="Hold" then setVal(true) end
+                    end))
+                    addCleanup(UserInputService.InputEnded:Connect(function(input)
+                        if not toggleData.KeybindEnabled or not toggleData.KeybindKey then return end
+                        if toggleData.KeybindMode~="Hold" then return end
+                        if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+                        if input.KeyCode~=toggleData.KeybindKey then return end
+                        setVal(false)
+                    end))
                 end
 
                 local function fire() playClick(); setVal(not toggleData.Value) end
@@ -1600,6 +1526,7 @@ function RogueUI:CreateWindow(options)
                     end
                 end)
 
+                -- ── :ConfigPanel(builderFn) ───────────────────────────────────
                 local panelInst = nil
 
                 function toggleData:ConfigPanel(builderFn)
@@ -1607,10 +1534,11 @@ function RogueUI:CreateWindow(options)
 
                     local gear = makeGearBtn(tFrame, RogueUI.Theme)
 
-                    -- Badge abre/fecha o painel
-                    kbBadge.MouseButton1Click:Connect(function()
-                        if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
-                    end)
+                    if kbBadge then
+                        kbBadge.MouseButton1Click:Connect(function()
+                            if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
+                        end)
+                    end
 
                     panelInst = createRichConfigPanel(
                         screenGui, tFrame, text, RogueUI.Theme, addCleanup)
@@ -1625,8 +1553,33 @@ function RogueUI:CreateWindow(options)
                     local stToggle = panelInst:AddToggle("Ativado", default, function(v) setVal(v) end)
                     table.insert(toggleData.OnChangedCallbacks, function(v) stToggle:SetValue(v) end)
 
-                    -- Seção Keybind — sempre, via helper central
-                    buildKeybindSection(panelInst, toggleData, text, setVal, addCleanup, RogueUI.Theme)
+                    -- Seção Keybind
+                    if hasKeybind then
+                        panelInst:AddSeparator()
+                        panelInst:AddSection("Keybind")
+
+                        local kbEnabled = panelInst:AddModeSelect(
+                            "Status", {"Ativo","Inativo"},
+                            toggleData.KeybindEnabled and 1 or 2,
+                            function(idx)
+                                toggleData.KeybindEnabled = (idx==1)
+                                refreshBadge()
+                            end)
+
+                        panelInst:AddKeybind(
+                            "Tecla",
+                            toggleData.KeybindKey or Enum.KeyCode.Unknown,
+                            function(newKey)
+                                toggleData.KeybindKey     = newKey
+                                toggleData.KeybindEnabled = true
+                                kbEnabled:SetIndex(1)
+                                refreshBadge()
+                            end)
+
+                        panelInst:AddModeSelect(
+                            "Modo", {"Toggle","Hold"}, 1,
+                            function(_,val) toggleData.KeybindMode=val end)
+                    end
 
                     -- Builder do CoreManager
                     if type(builderFn)=="function" then
@@ -1753,6 +1706,7 @@ function RogueUI:CreateWindow(options)
                     local slWidget = panelInst:AddSlider("", min, max, default, rounding,
                         function(v) setSlider(v) end)
 
+                    -- Sincroniza ambos ao arrastar o slider da groupbox
                     table.insert(sliderData.OnChangedCallbacks, function(v)
                         valLbl:SetText(text..": "..tostring(v))
                         slWidget:SetValue(v)
@@ -1848,7 +1802,6 @@ function RogueUI:CreateWindow(options)
                 mScroll.ScrollBarImageColor3 = RogueUI.Theme.BorderColor
                 mScroll.CanvasSize         = UDim2.new(0,0,0,0)
                 mScroll.ZIndex             = 100
-                mScroll.Active             = false  -- FIX: não interceptar cliques das opções
                 mScroll.Parent             = menu
 
                 local mLayout = Instance.new("UIListLayout")
@@ -1896,15 +1849,23 @@ function RogueUI:CreateWindow(options)
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
                     local gen = openGen
                     local rawPos = input.Position
+                    print("[MAIN-DD-DEBUG] InputBegan triggered for main dropdown:", text or "Unknown", "rawPos:", rawPos)
                     task.defer(function()
                         if not open or openGen ~= gen then return end
                         local mp=Vector2.new(rawPos.X, rawPos.Y)
+                        local mLoc=UserInputService:GetMouseLocation()
                         local mp2=menu.AbsolutePosition; local ms=menu.AbsoluteSize
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                         local inB=mp.X>=bp.X  and mp.X<=bp.X+bs.X  and mp.Y>=bp.Y  and mp.Y<=bp.Y+bs.Y
+                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, mLoc: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                            tostring(text), tostring(mp), tostring(mLoc), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB),
+                            tostring(menu.Parent and menu.Parent.Name), tostring(menu.Parent and menu.Parent.ClassName), tostring(menu.Position)))
                         if not inM and not inB then
+                            print("[MAIN-DD-DEBUG] Closing main dropdown:", text)
                             closeMenu()
+                        else
+                            print("[MAIN-DD-DEBUG] Keeping main dropdown open:", text)
                         end
                     end)
                 end))
@@ -1943,11 +1904,25 @@ function RogueUI:CreateWindow(options)
                         opt.Active           = true
                         opt.Selectable       = true
                         opt.Parent           = mScroll
-                        opt.MouseEnter:Connect(function() opt.TextColor3=RogueUI.Theme.TextActive; playHover() end)
+                        opt.MouseEnter:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseEnter on option:", optVal, "label:", text)
+                            opt.TextColor3=RogueUI.Theme.TextActive; playHover()
+                        end)
                         opt.MouseLeave:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseLeave on option:", optVal, "label:", text)
                             if not selected[optVal] then opt.TextColor3=RogueUI.Theme.TextNormal end
                         end)
+                        opt.MouseButton1Down:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseButton1Down on option:", optVal, "label:", text)
+                        end)
+                        opt.MouseButton1Up:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseButton1Up on option:", optVal, "label:", text)
+                        end)
+                        opt.Activated:Connect(function()
+                            print("[MAIN-DD-DEBUG] Activated on option:", optVal, "label:", text)
+                        end)
                         opt.MouseButton1Click:Connect(function()
+                            print("[MAIN-DD-DEBUG] Click! label:", text, "opt:", optVal, "multi:", isMulti)
                             if isMulti then
                                 selected[optVal]=not selected[optVal]
                                 opt.TextColor3=selected[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
@@ -2086,7 +2061,8 @@ function RogueUI:CreateWindow(options)
                         listening=false; pb.Text="["..tostring(nk.Name).."]"
                         pb.TextColor3=RogueUI.Theme.TextActive; pbStroke.Color=RogueUI.Theme.BorderInactive
                         kd.Value=nk
-                        if conn then conn:Disconnect(); conn=nil end
+                        -- Desconecta manualmente: não depende do addCleanup para conexão temporária
+                        if conn then pcall(function() conn:Disconnect() end); conn=nil end
                         if id=="MenuKeybind" then self_Window.ToggleKeybind=kd end
                         if opts2.Callback then task.spawn(opts2.Callback,nk) end
                         for _,f in ipairs(kd.OnChangedCallbacks) do task.spawn(f,nk) end
@@ -2096,9 +2072,11 @@ function RogueUI:CreateWindow(options)
                         if listening then return end
                         playClick(); listening=true; pb.Text="[...]"
                         pb.TextColor3=RogueUI.Theme.TextNormal; pbStroke.Color=RogueUI.Theme.BorderColor
-                        conn=addCleanup(UserInputService.InputBegan:Connect(function(input)
+                        -- Conexão temporária: gerenciada manualmente para não acumular
+                        -- uma entrada em CleanupConnections a cada clique
+                        conn=UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType==Enum.UserInputType.Keyboard then stopL(input.KeyCode) end
-                        end))
+                        end)
                     end)
 
                     function kd:SetValue(nk) stopL(nk) end
