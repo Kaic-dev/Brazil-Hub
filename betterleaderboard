@@ -98,9 +98,11 @@ local ConnectionManager = safeRequireRemote(
 local BetterLeaderboard = {}
 BetterLeaderboard.__index = BetterLeaderboard
 
-function BetterLeaderboard.new()
+function BetterLeaderboard.new(stateManager)
     local self = setmetatable({}, BetterLeaderboard)
 
+    self.stateManager         = stateManager
+    self.moduleName           = "BetterLeaderboard"
     self.enabled              = false
     self.screenGui            = nil
     self.leaderboard          = nil
@@ -578,6 +580,12 @@ function BetterLeaderboard:enable()
     if not playerGui then return end
 
     self.enabled      = true
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:enableModule(self.moduleName)
+    end
+    
     self._playerCount = 0
 
     self:_hideOriginalLeaderboard()
@@ -632,6 +640,11 @@ end
 function BetterLeaderboard:disable()
     if not self.enabled then return end
     self.enabled = false
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:disableModule(self.moduleName)
+    end
 
     -- Cancela todos os rogue loaders
     if self._rogueLoadFlags then
