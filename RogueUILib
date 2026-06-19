@@ -971,13 +971,18 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick(); listening=true
             btn.Text="[...]"; btn.TextColor3=theme.TextNormal
             bStroke.Color=theme.BorderColor
-            -- Conexão temporária: gerenciada manualmente, não passa por addCleanup
-            -- para evitar acúmulo de listeners a cada clique
+            -- Conexão temporária: gerenciada manualmente para não acumular listeners.
+            -- stopListening() desconecta listenConn assim que uma tecla é pressionada.
             listenConn=UserInputService.InputBegan:Connect(function(input)
                 if input.UserInputType==Enum.UserInputType.Keyboard then
                     stopListening(input.KeyCode)
                 end
             end)
+        end)
+
+        -- Garante limpeza se o painel for destruído enquanto está em modo de escuta
+        addCleanup(function()
+            if listenConn then pcall(function() listenConn:Disconnect() end); listenConn=nil end
         end)
 
         local api = { Value=curKey }
@@ -2073,10 +2078,16 @@ function RogueUI:CreateWindow(options)
                         playClick(); listening=true; pb.Text="[...]"
                         pb.TextColor3=RogueUI.Theme.TextNormal; pbStroke.Color=RogueUI.Theme.BorderColor
                         -- Conexão temporária: gerenciada manualmente para não acumular
-                        -- uma entrada em CleanupConnections a cada clique
+                        -- uma entrada em CleanupConnections a cada clique.
+                        -- stopL() desconecta conn assim que uma tecla é pressionada.
                         conn=UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType==Enum.UserInputType.Keyboard then stopL(input.KeyCode) end
                         end)
+                    end)
+
+                    -- Garante limpeza se a janela for destruída enquanto está em modo de escuta
+                    addCleanup(function()
+                        if conn then pcall(function() conn:Disconnect() end); conn=nil end
                     end)
 
                     function kd:SetValue(nk) stopL(nk) end
