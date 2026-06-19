@@ -1,1 +1,429 @@
+-- StateManager.lua
+-- Gerenciador centralizado de estado para todos os módulos do Brazil Hub
+-- Fornece: registro de módulos, sincronização de estado, observadores de eventos
 
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local StateManager = {}
+StateManager.__index = StateManager
+
+--// ─── Constructor ──────────────────────────────────────────────────────────
+
+function StateManager.new()
+    local self = setmetatable({}, StateManager)
+    
+    -- Estado de cada módulo
+    self._moduleStates = {}      -- [moduleName] = { enabled, data, metadata }
+    
+    -- Observadores de eventos
+    self._observers = {}          -- [eventName] = { callback1, callback2, ... }
+    
+    -- Histórico de mudanças (para debugging)
+    self._history = {}
+    self._maxHistorySize = 100
+    
+    -- Locks para evitar recursão
+    self._locks = {}
+    
+    return self
+end
+
+--// ─── Module Registration ──────────────────────────────────────────────────
+
+--[[
+    Registra um módulo no StateManager
+    @param moduleName: string - Nome único do módulo (ex: "FFHandler")
+    @param initialData: table - Dados iniciais do módulo
+    @return: boolean - true se registrado com sucesso
+]]
+function StateManager:registerModule(moduleName, initialData)
+    if self._moduleStates[moduleName] then
+        warn("[StateManager] Módulo já registrado:", moduleName)
+        return false
+    end
+    
+    self._moduleStates[moduleName] = {
+        enabled = false,
+        data = initialData or {},
+        metadata = {
+            createdAt = os.time(),
+            lastUpdate = os.time(),
+            updateCount = 0,
+        }
+    }
+    
+    self:_logHistory("module:registered", moduleName)
+    self:_notify("module:registered", moduleName)
+    
+    return true
+end
+
+--[[
+    Remove um módulo do registro
+    @param moduleName: string - Nome do módulo
+]]
+function StateManager:unregisterModule(moduleName)
+    if not self._moduleStates[moduleName] then
+        warn("[StateManager] Módulo não encontrado:", moduleName)
+        return false
+    end
+    
+    self._moduleStates[moduleName] = nil
+    self:_logHistory("module:unregistered", moduleName)
+    self:_notify("module:unregistered", moduleName)
+    return true
+end
+
+--// ─── Module Enable/Disable ───────────────────────────────────────────────
+
+--[[
+    Ativa um módulo
+    @param moduleName: string - Nome do módulo
+    @return: boolean - true se ativado com sucesso
+]]
+function StateManager:enableModule(moduleName)
+    local state = self._moduleStates[moduleName]
+    if not state then
+        warn("[StateManager] Módulo não registrado:", moduleName)
+        return false
+    end
+    
+    if state.enabled then
+        return true  -- Já estava ativado
+    end
+    
+    if self._locks[moduleName] then
+        warn("[StateManager] Módulo já está sendo processado:", moduleName)
+        return false
+    end
+    
+    self._locks[moduleName] = true
+    
+    state.enabled = true
+    state.metadata.lastUpdate = os.time()
+    state.metadata.updateCount = state.metadata.updateCount + 1
+    
+    self:_logHistory("module:enabled", moduleName)
+    self:_notify("module:enabled", moduleName)
+    
+    self._locks[moduleName] = nil
+    return true
+end
+
+--[[
+    Desativa um módulo
+    @param moduleName: string - Nome do módulo
+    @return: boolean - true se desativado com sucesso
+]]
+function StateManager:disableModule(moduleName)
+    local state = self._moduleStates[moduleName]
+    if not state then
+        warn("[StateManager] Módulo não registrado:", moduleName)
+        return false
+    end
+    
+    if not state.enabled then
+        return true  -- Já estava desativado
+    end
+    
+    if self._locks[moduleName] then
+        warn("[StateManager] Módulo já está sendo processado:", moduleName)
+        return false
+    end
+    
+    self._locks[moduleName] = true
+    
+    state.enabled = false
+    state.metadata.lastUpdate = os.time()
+    state.metadata.updateCount = state.metadata.updateCount + 1
+    
+    self:_logHistory("module:disabled", moduleName)
+    self:_notify("module:disabled", moduleName)
+    
+    self._locks[moduleName] = nil
+    return true
+end
+
+--[[
+    Toggle um módulo (ativa se desativado, desativa se ativado)
+    @param moduleName: string - Nome do módulo
+    @return: boolean - novo estado (true = ativado)
+]]
+function StateManager:toggleModule(moduleName)
+    local state = self._moduleStates[moduleName]
+    if not state then
+        warn("[StateManager] Módulo não registrado:", moduleName)
+        return false
+    end
+    
+    if state.enabled then
+        self:disableModule(moduleName)
+        return false
+    else
+        self:enableModule(moduleName)
+        return true
+    end
+end
+
+--// ─── State Data Manipulation ──────────────────────────────────────────────
+
+--[[
+    Atualiza dados de um módulo
+    @param moduleName: string - Nome do módulo
+    @param key: string - Chave do dado
+    @param value: any - Novo valor
+]]
+function StateManager:setModuleData(moduleName, key, value)
+    local state = self._moduleStates[moduleName]
+    if not state then
+        warn("[StateManager] Módulo não registrado:", moduleName)
+        return false
+    end
+    
+    local oldValue = state.data[key]
+    state.data[key] = value
+    state.metadata.lastUpdate = os.time()
+    state.metadata.updateCount = state.metadata.updateCount + 1
+    
+    self:_logHistory("data:updated", moduleName, key, oldValue, value)
+    self:_notify("data:updated", moduleName, key, value)
+    
+    return true
+end
+
+--[[
+    Obtém um dado de um módulo
+    @param moduleName: string - Nome do módulo
+    @param key: string - Chave do dado
+    @return: any - Valor ou nil
+]]
+function StateManager:getModuleData(moduleName, key)
+    local state = self._moduleStates[moduleName]
+    if not state then return nil end
+    return state.data[key]
+end
+
+--[[
+    Obtém todos os dados de um módulo
+    @param moduleName: string - Nome do módulo
+    @return: table - Tabela de dados
+]]
+function StateManager:getModuleDataAll(moduleName)
+    local state = self._moduleStates[moduleName]
+    if not state then return {} end
+    return state.data
+end
+
+--[[
+    Atualiza múltiplos dados de uma vez
+    @param moduleName: string - Nome do módulo
+    @param dataTable: table - { key = value, ... }
+]]
+function StateManager:batchUpdateModuleData(moduleName, dataTable)
+    local state = self._moduleStates[moduleName]
+    if not state then
+        warn("[StateManager] Módulo não registrado:", moduleName)
+        return false
+    end
+    
+    for key, value in pairs(dataTable) do
+        state.data[key] = value
+    end
+    
+    state.metadata.lastUpdate = os.time()
+    state.metadata.updateCount = state.metadata.updateCount + 1
+    
+    self:_logHistory("data:batch_updated", moduleName, dataTable)
+    self:_notify("data:batch_updated", moduleName, dataTable)
+    
+    return true
+end
+
+--// ─── Module Status Queries ───────────────────────────────────────────────
+
+--[[
+    Verifica se um módulo está ativado
+    @param moduleName: string - Nome do módulo
+    @return: boolean
+]]
+function StateManager:isModuleEnabled(moduleName)
+    local state = self._moduleStates[moduleName]
+    return state and state.enabled or false
+end
+
+--[[
+    Obtém o estado completo de um módulo
+    @param moduleName: string - Nome do módulo
+    @return: table - { enabled, data, metadata }
+]]
+function StateManager:getModuleState(moduleName)
+    local state = self._moduleStates[moduleName]
+    if not state then return nil end
+    
+    -- Retorna cópia para evitar mutações externas
+    return {
+        enabled = state.enabled,
+        data = type(state.data) == "table" and table.clone(state.data) or state.data,
+        metadata = table.clone(state.metadata)
+    }
+end
+
+--[[
+    Lista todos os módulos registrados
+    @return: table - { moduleName1, moduleName2, ... }
+]]
+function StateManager:getRegisteredModules()
+    local modules = {}
+    for name in pairs(self._moduleStates) do
+        table.insert(modules, name)
+    end
+    table.sort(modules)
+    return modules
+end
+
+--[[
+    Obtém o estado global de TODOS os módulos
+    @return: table - { moduleName = { enabled, data, metadata }, ... }
+]]
+function StateManager:getSystemState()
+    local systemState = {}
+    for name, state in pairs(self._moduleStates) do
+        systemState[name] = {
+            enabled = state.enabled,
+            data = type(state.data) == "table" and table.clone(state.data) or state.data,
+            metadata = table.clone(state.metadata)
+        }
+    end
+    return systemState
+end
+
+--// ─── Event System ────────────────────────────────────────────────────────
+
+--[[
+    Subscreve a um evento
+    @param eventName: string - Nome do evento (ex: "module:enabled", "data:updated")
+    @param callback: function - Função a ser chamada
+    @return: string - ID da subscrição (para unsubscribe)
+]]
+function StateManager:on(eventName, callback)
+    if type(callback) ~= "function" then
+        warn("[StateManager] Callback deve ser uma função")
+        return nil
+    end
+    
+    if not self._observers[eventName] then
+        self._observers[eventName] = {}
+    end
+    
+    local subscriptionId = tostring(math.random(100000, 999999))
+    self._observers[eventName][subscriptionId] = callback
+    
+    return subscriptionId
+end
+
+--[[
+    Remove subscrição a um evento
+    @param eventName: string - Nome do evento
+    @param subscriptionId: string - ID retornado por on()
+]]
+function StateManager:off(eventName, subscriptionId)
+    if self._observers[eventName] and self._observers[eventName][subscriptionId] then
+        self._observers[eventName][subscriptionId] = nil
+    end
+end
+
+--// ─── History & Debugging ─────────────────────────────────────────────────
+
+--[[
+    Obtém o histórico de mudanças
+    @return: table - Lista de eventos
+]]
+function StateManager:getHistory()
+    return table.clone(self._history)
+end
+
+--[[
+    Limpa o histórico
+]]
+function StateManager:clearHistory()
+    self._history = {}
+end
+
+--[[
+    Faz dump do estado completo em uma tabela
+    @return: table - Estado completo formatado
+]]
+function StateManager:dumpState()
+    return {
+        timestamp = os.time(),
+        modules = self:getSystemState(),
+        history = table.clone(self._history),
+        registeredCount = #self:getRegisteredModules(),
+    }
+end
+
+--[[
+    Exibe estado formatado no console
+]]
+function StateManager:printState()
+    local modules = self:getRegisteredModules()
+    print("\n=== BRAZIL HUB STATE MANAGER ===")
+    print("Módulos registrados:", #modules)
+    
+    for _, name in ipairs(modules) do
+        local state = self._moduleStates[name]
+        local status = state.enabled and "✓ ENABLED" or "✗ DISABLED"
+        print(string.format("  %s: %s (updates: %d)", name, status, state.metadata.updateCount))
+    end
+    
+    print("\nÚltimos 5 eventos:")
+    local recentHistory = {}
+    for i = math.max(1, #self._history - 4), #self._history do
+        table.insert(recentHistory, self._history[i])
+    end
+    
+    for _, event in ipairs(recentHistory) do
+        print(string.format("  [%s] %s", event.event, event.details or ""))
+    end
+    print("================================\n")
+end
+
+--// ─── Private Methods ─────────────────────────────────────────────────────
+
+--[[
+    Notifica todos os observadores de um evento
+    @private
+]]
+function StateManager:_notify(eventName, ...)
+    if not self._observers[eventName] then return end
+    
+    local args = {...}
+    for _, callback in pairs(self._observers[eventName]) do
+        local success, err = pcall(callback, unpack(args))
+        if not success then
+            warn("[StateManager] Erro em observer de evento:", eventName, tostring(err))
+        end
+    end
+end
+
+--[[
+    Registra um evento no histórico
+    @private
+]]
+function StateManager:_logHistory(event, ...)
+    local entry = {
+        timestamp = os.time(),
+        event = event,
+        details = table.concat({...}, " | "),
+    }
+    
+    table.insert(self._history, entry)
+    
+    -- Limita tamanho do histórico
+    if #self._history > self._maxHistorySize then
+        table.remove(self._history, 1)
+    end
+end
+
+return StateManager
