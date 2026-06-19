@@ -1,334 +1,969 @@
+-- AutoBlock: Advanced multi-condition threat detection system - OPTIMIZED FOR PERFORMANCE
+-- Supports single and combo threats (animation + item + state combinations)
+
 local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
-local Workspace = game:GetService("Workspace")
-local Debris = game:GetService("Debris")
 
-local LIVE_FOLDER = Workspace:WaitForChild("Live", 5)
-local LocalPlayer = Players.LocalPlayer
-local Mouse = LocalPlayer:GetMouse()
-local RemoteFunction
+-- External dependency for connection management
+local function safeRequireRemote(url, name)
+    local success, result = pcall(function()
+        return game:HttpGet(url)
+    end)
+    if not success then
+        warn("[AutoBlock] Failed to download module:", name or url, tostring(result))
+        return nil
+    end
 
-if game.PlaceId == 14341521240 then
-    for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-        if obj:IsA("RemoteFunction") and obj.Name == "" then
-            RemoteFunction = obj
-            break
-        end
+    local moduleFunc, err = loadstring(result)
+    if not moduleFunc then
+        warn("[AutoBlock] Failed to compile module:", name or url, tostring(err))
+        return nil
     end
-else
-    local requests = ReplicatedStorage:WaitForChild("Requests", 5)
-    if requests then
-        RemoteFunction = requests:WaitForChild("GetMouse", 5)
+
+    local ok, module = pcall(moduleFunc)
+    if not ok then
+        warn("[AutoBlock] Failed to execute module:", name or url, tostring(module))
+        return nil
     end
+
+    return module
 end
 
-local AutoAim = {}
-AutoAim.__index = AutoAim
+local ConnectionManager = safeRequireRemote("https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager", "ConnectionManager") or {
+    new = function()
+        return {
+            add = function() end,
+            disconnectAll = function() end
+        }
+    end
+}
 
-local deg, acos, random = math.deg, math.acos, math.random
-local Vector3new = Vector3.new
+-- Constants and cached values
+local DEFAULT_BLOCK_RADIUS = 200
+local LOCAL_PLAYER = Players.LocalPlayer
+local DETECTION_INTERVAL = 0.01 -- 100 FPS para máxima velocidade de reação
+local CACHE_DURATION = 0.1 -- Cache player states for 100ms
 
-function AutoAim.new(stateManager)
-    local self = setmetatable({
-        stateManager = stateManager,
-        moduleName = "Auto-Aim",
-        enabled = false,
-        maxRange = 200,
-        timeToHit = 0.15,
-        toolNames = {Fimbulvetr=true, Perflora=true, Armis=true, Grapple=true, Percutiens=true, Inferi=true},
-        studsBehindMin = 20,
-        studsBehindMax = 30,
-        fovMax = 20,
-        targetHistory = {},
-        historyMaxSize = 10,
+-- Pre-computed values
+local math_deg = math.deg
+local math_acos = math.acos
+local table_insert = table.insert
+local tick = tick
 
-        _mouseHit = nil,
-        _mouseTarget = nil,
-        _mouseUnitRay = nil,
-        _mouseX = 0,
-        _mouseY = 0,
-    }, AutoAim)
+-- Threat condition types
+local ConditionType = {
+    ANIMATION = "animation",
+    EQUIPPED_ITEM = "equippedItem",
+    PLAYER_STATE = "playerState",
+    PROXIMITY = "proximity",
+    HEALTH = "health",
+    WALKSPEED = "walkspeed",
+    ACCESSORY = "accessory",
+    FACING = "facing"
+}
+
+-- Threat matching operators
+local MatchOperator = {
+    AND = "and",
+    OR = "or"
+}
+
+-- Default single-condition threats
+local DEFAULT_SINGLE_THREATS = {
+    ["grapple"] = {
+        name = "Grapple",
+        category = "skills",
+        priority = 1,
+        conditions = {
+            {
+                type = ConditionType.ANIMATION,
+                scope = "proximity",
+                value = "rbxassetid://3110530226"
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 200
+    },
+    ["verdien"] = {
+        name = "Verdien",
+        category = "skills",
+        priority = 1,
+        conditions = {
+            {
+                type = ConditionType.ACCESSORY,
+                value = "Charge"
+            },
+            {
+                type = ConditionType.EQUIPPED_ITEM,
+                value = "Verdien"
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 200
+    },
+    ["spear_strikes"] = {
+        name = "Spear Strikes",
+        category = "skills",
+        priority = 1,
+        conditions = {
+            {
+                type = ConditionType.ANIMATION,
+                value = "rbxassetid://2981817530"
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 10
+    },
+    ["spear_m2"] = {
+        name = "Spear M2",
+        category = "attack_type",
+        priority = 2,
+        conditions = {
+            {
+                type = ConditionType.ANIMATION,
+                value = "rbxassetid://2890507639"
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 10
+    },
+    ["heavy_attack"] = {
+        name = "Heavy Attack",
+        category = "attack_type",
+        priority = 2,
+        conditions = {
+            {
+                type = ConditionType.ACCESSORY,
+                value = "HeavyAttack"
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 10
+    },
+    ["light_attack"] = {
+        name = "Light Attack",
+        category = "attack_type",
+        priority = 3,
+        conditions = {
+            {
+                type = ConditionType.ACCESSORY,
+                value = "LightAttack"
+            },
+            {
+                type = ConditionType.FACING,
+                angle = 180
+            }
+        },
+        operator = MatchOperator.AND,
+        blockDistance = 15
+    },
+}
+
+local AutoBlock = {}
+AutoBlock.__index = AutoBlock
+
+-- Constructor
+function AutoBlock.new(stateManager, blockRadius)
+    -- Compatibilidade: se stateManager for um número, é o blockRadius (modo legado)
+    if type(stateManager) == "number" then
+        blockRadius = stateManager
+        stateManager = nil
+    end
+    
+    local self = setmetatable({}, AutoBlock)
+    
+    -- StateManager para sincronização centralizada
+    self.stateManager = stateManager
+    self.moduleName = "auto_block"
+    
+    -- Core properties
+    self.enabled = false
+    self.blockRadius = blockRadius or DEFAULT_BLOCK_RADIUS
+    self._connectionManager = ConnectionManager.new()
+    self._isCurrentlyBlocking = false
+    
+    -- Threat configurations
+    self._threatConfigs = {}
+    
+    -- Detection settings
+    self._detectionSettings = {
+        enableSingleThreats = true,
+        enableComboThreats = true,
+        priorityThreshold = 0,
+        debugMode = false  -- Disabled by default for performance
+    }
+    
+    -- Current threat tracking
+    self._currentThreats = {}
+    self._blockStartTime = 0
+    self._lastDetectionTime = 0
+    
+    -- Performance caches
+    self._playerCache = {} -- Cache player data
+    self._lastCacheUpdate = 0
+    self._validPlayers = {} -- Pre-filtered valid players
+    self._lastPlayerUpdate = 0
+    
+    -- Throttling
+    self._lastDetectionRun = 0
+    
+    -- Initialize with default configurations
+    self:_initializeDefaultThreats()
+    
     return self
 end
 
-function AutoAim:setRange(range) self.maxRange = range end
-function AutoAim:setTimeToHit(time) self.timeToHit = time end
-function AutoAim:setFOV(fov) self.fovMax = fov end
-function AutoAim:setStudsBehindRange(min, max) self.studsBehindMin, self.studsBehindMax = min, max end
+-- Private Methods
 
-function AutoAim:setTools(toolTable)
-    if type(toolTable) ~= "table" then return end
-    if toolTable[1] then
-        local hash = {}
-        for i = 1, #toolTable do hash[toolTable[i]] = true end
-        self.toolNames = hash
-    else
-        self.toolNames = toolTable
+-- Initialize with default threat configurations
+function AutoBlock:_initializeDefaultThreats()
+    for threatId, config in pairs(DEFAULT_SINGLE_THREATS) do
+        self._threatConfigs[threatId] = config
     end
 end
 
-function AutoAim:updateMouseCache()
-    self._mouseHit     = Mouse.Hit
-    self._mouseTarget  = Mouse.Target
-    self._mouseUnitRay = Mouse.UnitRay
-    self._mouseX       = Mouse.X
-    self._mouseY       = Mouse.Y
-end
-
-function AutoAim:updateTargetHistory(target)
-    if not target then return end
-
-    local hrp = target:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    if not self.targetHistory[target] then
-        self.targetHistory[target] = {}
-    end
-
-    local history = self.targetHistory[target]
-
-    table.insert(history, {
-        time = tick(),
-        position = hrp.Position,
-        velocity = hrp.Velocity
-    })
-
-    while #history > self.historyMaxSize do
-        table.remove(history, 1)
-    end
-end
-
-function AutoAim:calculateMovementPrediction(target, predictionTime)
-    if not target or not target.Parent then return nil end
-
-    local hrp = target:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-
-    local history = self.targetHistory[target]
-
-    if not history or #history < 2 then
-        return hrp.Position + hrp.Velocity * predictionTime
-    end
-
-    local totalVelocity = Vector3.new(0, 0, 0)
-    local velocityCount = 0
-
-    for i = 2, #history do
-        local timeDiff = history[i].time - history[i-1].time
-        if timeDiff > 0 then
-            local velocity = (history[i].position - history[i-1].position) / timeDiff
-            totalVelocity = totalVelocity + velocity
-            velocityCount = velocityCount + 1
-        end
-    end
-
-    if velocityCount > 0 then
-        local averageVelocity = totalVelocity / velocityCount
-        local predictedPos = history[#history].position + averageVelocity * predictionTime
-        return predictedPos + Vector3.new(0, -2, 0)
-    end
-
-    return hrp.Position + hrp.Velocity * predictionTime
-end
-
-function AutoAim:cleanupTargetHistory()
-    local toRemove = {}
-    for target in pairs(self.targetHistory) do
-        if not target.Parent then
-            table.insert(toRemove, target)
-        end
-    end
-    for _, target in ipairs(toRemove) do
-        self.targetHistory[target] = nil
-    end
-end
-
-function AutoAim:getBestNPC(localChar)
-    local hrp = localChar:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil end
-
-    local camera = Workspace.CurrentCamera
-    local mouseRay = camera:ScreenPointToRay(self._mouseX, self._mouseY)
-    local mouseDir = mouseRay.Direction
-    local camPos = camera.CFrame.Position
-
-    if not LIVE_FOLDER then
-        LIVE_FOLDER = Workspace:FindFirstChild("Live") or Workspace:WaitForChild("Live", 1)
-    end
-    if not LIVE_FOLDER then return nil end
-    if mouseDir.Magnitude < 0.001 then return nil end
-
-    local closestNPC, minAngle = nil, self.fovMax * 0.5
-    local children = LIVE_FOLDER:GetChildren()
-
-    for i = 1, #children do
-        local model = children[i]
-        if model ~= localChar then
-            local head = model:FindFirstChild("Head")
-            if head and not model:FindFirstChild("Knocked") then
-                local _, onScreen = camera:WorldToViewportPoint(head.Position)
-                if onScreen then
-                    local dirVec = head.Position - camPos
-                    if dirVec.Magnitude > 0.001 then
-                        local dot = mouseDir:Dot(dirVec.Unit)
-                        if dot == dot then
-                            local angle = deg(acos(math.clamp(dot, -1, 1)))
-                            if angle < minAngle then
-                                closestNPC = model
-                                minAngle = angle
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    return closestNPC
-end
-
-function AutoAim:getMouseFallback()
-    return {
-        Hit     = self._mouseHit     or CFrame.new(),
-        Target  = self._mouseTarget  or nil,
-        UnitRay = self._mouseUnitRay or Ray.new(Vector3.zero, Vector3.zAxis),
-        X       = self._mouseX       or 0,
-        Y       = self._mouseY       or 0,
-    }
-end
-
-function AutoAim:enable()
-    if self.enabled then return end
-
-    if not RemoteFunction then
-        if game.PlaceId == 14341521240 then
-            for _, obj in ipairs(ReplicatedStorage:GetChildren()) do
-                if obj:IsA("RemoteFunction") and obj.Name == "" then
-                    RemoteFunction = obj
-                    break
-                end
-            end
-        else
-            local requests = ReplicatedStorage:FindFirstChild("Requests")
-            if requests then
-                RemoteFunction = requests:FindFirstChild("GetMouse")
-            end
-        end
-    end
-
-    if not RemoteFunction then
-        warn("[Auto-Aim] RemoteFunction not found. Cannot enable.")
+-- Cached player validation (updated every 100ms)
+function AutoBlock:_updateValidPlayers()
+    local currentTime = tick()
+    if currentTime - self._lastPlayerUpdate < CACHE_DURATION then
         return
     end
+    
+    self._lastPlayerUpdate = currentTime
+    local validPlayers = {}
+    local count = 0
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LOCAL_PLAYER and 
+           player.Character and 
+           player.Character:FindFirstChild("HumanoidRootPart") and
+           player.Character:FindFirstChild("Humanoid") then
+            count = count + 1
+            validPlayers[count] = player
+        end
+    end
+    
+    self._validPlayers = validPlayers
+end
 
+-- Get the local player's character and validate it (cached)
+function AutoBlock:_getValidatedLocalCharacter()
+    if not LOCAL_PLAYER or not LOCAL_PLAYER.Character then
+        return nil
+    end
+    
+    local character = LOCAL_PLAYER.Character
+    if not character:FindFirstChild("HumanoidRootPart") then
+        return nil
+    end
+    
+    return character
+end
+
+-- Cached remote access
+function AutoBlock:_getCharacterRemotes(character)
+    local remotes = character:FindFirstChild("CharacterHandler")
+    if remotes then
+        remotes = remotes:FindFirstChild("Remotes")
+    end
+    return remotes
+end
+
+-- Execute remote event if it exists and is valid
+function AutoBlock:_executeRemoteEvent(remotes, remoteName)
+    if not remotes then return false end
+    
+    local remote = remotes:FindFirstChild(remoteName)
+    if remote and remote:IsA("RemoteEvent") then
+        remote:FireServer()
+        return true
+    end
+    return false
+end
+
+-- Cached equipped item check
+function AutoBlock:_getEquippedItem(player)
+    local currentTime = tick()
+    local cacheKey = player.Name .. "_equipped"
+    local cache = self._playerCache[cacheKey]
+    
+    if cache and currentTime - cache.time < CACHE_DURATION then
+        return cache.value
+    end
+    
+    local equippedItem = nil
+    if player.Character then
+        local equippedTool = player.Character:FindFirstChildOfClass("Tool")
+        if equippedTool then
+            equippedItem = equippedTool.Name
+        end
+    end
+    
+    self._playerCache[cacheKey] = {
+        value = equippedItem,
+        time = currentTime
+    }
+    
+    return equippedItem
+end
+
+-- Optimized accessory check with minimal monitoring
+function AutoBlock:_hasAccessory(player, accessoryName)
+    if not player.Character then return false end
+    
+    local cacheKey = player.Name .. "_accessory_" .. accessoryName
+    local currentTime = tick()
+    local cache = self._playerCache[cacheKey]
+    
+    if cache and currentTime - cache.time < CACHE_DURATION then
+        return cache.value
+    end
+    
+    local hasAccessory = player.Character:FindFirstChild(accessoryName) ~= nil
+    
+    self._playerCache[cacheKey] = {
+        value = hasAccessory,
+        time = currentTime
+    }
+    
+    return hasAccessory
+end
+
+-- Cached player states
+function AutoBlock:_getPlayerStates(player)
+    local currentTime = tick()
+    local cacheKey = player.Name .. "_states"
+    local cache = self._playerCache[cacheKey]
+    
+    if cache and currentTime - cache.time < CACHE_DURATION then
+        return cache.value
+    end
+    
+    local states = {}
+    
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        local humanoid = player.Character.Humanoid
+        
+        -- Movement states
+        if humanoid.MoveDirection.Magnitude > 0 then
+            if humanoid.WalkSpeed > 20 then
+                states.Sprinting = true
+            else
+                states.Walking = true
+            end
+        else
+            states.Idle = true
+        end
+        
+        -- Action states
+        if humanoid.Jump then
+            states.Jumping = true
+        end
+        
+        if humanoid.PlatformStand then
+            states.Stunned = true
+        end
+        
+        -- Health state
+        if humanoid.Health < humanoid.MaxHealth * 0.3 then
+            states.LowHealth = true
+        end
+    end
+    
+    self._playerCache[cacheKey] = {
+        value = states,
+        time = currentTime
+    }
+    
+    return states
+end
+
+-- Cached active animations
+function AutoBlock:_getActiveAnimations(player)
+    local currentTime = tick()
+    local cacheKey = player.Name .. "_animations"
+    local cache = self._playerCache[cacheKey]
+    
+    if cache and currentTime - cache.time < CACHE_DURATION then
+        return cache.value
+    end
+    
+    local animations = {}
+    
+    if player.Character and player.Character:FindFirstChild("Humanoid") then
+        local animationTracks = player.Character.Humanoid:GetPlayingAnimationTracks()
+        
+        for _, track in ipairs(animationTracks) do
+            if track.Animation and track.Animation.AnimationId then
+                animations[track.Animation.AnimationId] = true
+            end
+        end
+    end
+    
+    self._playerCache[cacheKey] = {
+        value = animations,
+        time = currentTime
+    }
+    
+    return animations
+end
+
+-- Clear cached data for a specific player (called on PlayerRemoving)
+function AutoBlock:_clearPlayerCache(playerName)
+    -- Remove all cache entries that belong to this player
+    local keysToRemove = {}
+    for key in pairs(self._playerCache) do
+        if key:sub(1, #playerName) == playerName then
+            keysToRemove[#keysToRemove + 1] = key
+        end
+    end
+    for i = 1, #keysToRemove do
+        self._playerCache[keysToRemove[i]] = nil
+    end
+end
+
+-- Optimized condition checking with early returns
+function AutoBlock:_checkCondition(condition, player, myPosition)
+    local conditionType = condition.type
+    
+    if conditionType == ConditionType.ANIMATION then
+        local activeAnimations = self:_getActiveAnimations(player)
+        return activeAnimations[condition.value] == true
+        
+    elseif conditionType == ConditionType.EQUIPPED_ITEM then
+        local equippedItem = self:_getEquippedItem(player)
+        local conditionValue = condition.value
+        
+        if type(conditionValue) == "table" then
+            for _, item in ipairs(conditionValue) do
+                if equippedItem == item then
+                    return true
+                end
+            end
+            return false
+        else
+            return equippedItem == conditionValue
+        end
+        
+    elseif conditionType == ConditionType.ACCESSORY then
+        return self:_hasAccessory(player, condition.value)
+        
+    elseif conditionType == ConditionType.PLAYER_STATE then
+        local playerStates = self:_getPlayerStates(player)
+        return playerStates[condition.value] == true
+        
+    elseif conditionType == ConditionType.PROXIMITY then
+        if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+            return false
+        end
+        local distance = (myPosition - player.Character.HumanoidRootPart.Position).Magnitude
+        return distance <= condition.value
+        
+    elseif conditionType == ConditionType.HEALTH then
+        if not player.Character or not player.Character:FindFirstChild("Humanoid") then
+            return false
+        end
+        local humanoid = player.Character.Humanoid
+        local healthPercent = humanoid.Health / humanoid.MaxHealth
+        local comparison = condition.comparison
+        local value = condition.value
+        
+        if comparison == "<=" then
+            return healthPercent <= value
+        elseif comparison == ">=" then
+            return healthPercent >= value
+        elseif comparison == "<" then
+            return healthPercent < value
+        elseif comparison == ">" then
+            return healthPercent > value
+        else
+            return healthPercent == value
+        end
+        
+    elseif conditionType == ConditionType.WALKSPEED then
+        if not player.Character or not player.Character:FindFirstChild("Humanoid") then
+            return false
+        end
+        local walkSpeed = player.Character.Humanoid.WalkSpeed
+        local comparison = condition.comparison
+        local value = condition.value
+        
+        if comparison == "<=" then
+            return walkSpeed <= value
+        elseif comparison == ">=" then
+            return walkSpeed >= value
+        elseif comparison == "<" then
+            return walkSpeed < value
+        elseif comparison == ">" then
+            return walkSpeed > value
+        else
+            return walkSpeed == value
+        end
+        
+    elseif conditionType == ConditionType.FACING then
+        local angle = condition.angle or 45
+        return self:_isFacing(LOCAL_PLAYER, player, angle)
+    end
+    
+    return false
+end
+
+-- Optimized threat evaluation with early exits
+function AutoBlock:_evaluateThreat(threatConfig, player, myPosition)
+    local conditions = threatConfig.conditions
+    if not conditions or #conditions == 0 then
+        return false
+    end
+    
+    -- Early distance check
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return false
+    end
+    
+    local distance = (myPosition - player.Character.HumanoidRootPart.Position).Magnitude
+    local maxDistance = threatConfig.blockDistance or self.blockRadius
+    
+    if distance > maxDistance then
+        return false
+    end
+    
+    -- Evaluate conditions with early exit optimization
+    local operator = threatConfig.operator
+    
+    if operator == MatchOperator.AND then
+        -- All conditions must be true - exit early on first false
+        for _, condition in ipairs(conditions) do
+            if not self:_checkCondition(condition, player, myPosition) then
+                return false
+            end
+        end
+        return true, distance
+    else
+        -- Any condition can be true - exit early on first true
+        for _, condition in ipairs(conditions) do
+            if self:_checkCondition(condition, player, myPosition) then
+                return true, distance
+            end
+        end
+        return false
+    end
+end
+
+-- Optimized player scanning with reduced allocations
+function AutoBlock:_scanPlayerForThreats(player, myPosition)
+    local detectedThreats = {}
+    local threatCount = 0
+    
+    for threatId, threatConfig in pairs(self._threatConfigs) do
+        -- Check if this threat type is enabled
+        local isCombo = #threatConfig.conditions > 1
+        if (isCombo and not self._detectionSettings.enableComboThreats) or 
+           (not isCombo and not self._detectionSettings.enableSingleThreats) then
+            continue
+        end
+        
+        -- Check priority threshold
+        if threatConfig.priority < self._detectionSettings.priorityThreshold then
+            continue
+        end
+        
+        -- Evaluate threat conditions
+        local matched, dist = self:_evaluateThreat(threatConfig, player, myPosition)
+        if matched then
+            threatCount = threatCount + 1
+            detectedThreats[threatCount] = {
+                id = threatId,
+                config = threatConfig,
+                player = player.Name,
+                distance = dist,
+                detectedAt = tick()
+            }
+        end
+    end
+    
+    return detectedThreats
+end
+
+-- Optimized priority threat selection
+function AutoBlock:_getHighestPriorityThreat(allThreats)
+    if #allThreats == 0 then return nil end
+    
+    local highestPriority = 0
+    local priorityThreat = nil
+    
+    for i = 1, #allThreats do
+        local threat = allThreats[i]
+        if threat.config.priority > highestPriority then
+            highestPriority = threat.config.priority
+            priorityThreat = threat
+        end
+    end
+    
+    return priorityThreat
+end
+
+-- Update blocking state based on threat detection
+function AutoBlock:_updateBlockingState(threats)
+    local shouldBlock = #threats > 0
+    
+    if shouldBlock and not self._isCurrentlyBlocking then
+        local primaryThreat = self:_getHighestPriorityThreat(threats)
+        self:_activateBlock(primaryThreat, threats)
+    elseif not shouldBlock and self._isCurrentlyBlocking then
+        self:_deactivateBlock()
+    end
+    
+    self._currentThreats = threats
+end
+
+-- Activate blocking and update state
+function AutoBlock:_activateBlock(primaryThreat, allThreats)
+    if self:triggerBlock() then
+        self._isCurrentlyBlocking = true
+        self._blockStartTime = tick()
+        
+        -- Minimal logging for performance
+        if self._detectionSettings.debugMode then
+            print(string.format("[AutoBlock] Block: %s from %s", 
+                primaryThreat.config.name, primaryThreat.player))
+        end
+    end
+end
+
+-- Deactivate blocking and update state
+function AutoBlock:_deactivateBlock()
+    if self:triggerUnblock() then
+        self._isCurrentlyBlocking = false
+        self._currentThreats = {}
+        
+        if self._detectionSettings.debugMode then
+            local blockDuration = tick() - self._blockStartTime
+            print(string.format("[AutoBlock] Unblock (%.2fs)", blockDuration))
+        end
+    end
+end
+
+-- Public Methods
+
+-- Trigger block action
+function AutoBlock:triggerBlock()
+    local character = self:_getValidatedLocalCharacter()
+    if not character then return false end
+    
+    local remotes = self:_getCharacterRemotes(character)
+    return self:_executeRemoteEvent(remotes, "Block")
+end
+
+-- Trigger unblock action
+function AutoBlock:triggerUnblock()
+    local character = self:_getValidatedLocalCharacter()
+    if not character then return false end
+    
+    local remotes = self:_getCharacterRemotes(character)
+    return self:_executeRemoteEvent(remotes, "Unblock")
+end
+
+-- Add a new threat configuration
+function AutoBlock:addThreat(threatId, config)
+    if not threatId or not config then
+        return false
+    end
+    
+    if not config.name or not config.conditions or #config.conditions == 0 then
+        return false
+    end
+    
+    config.priority = config.priority or 1
+    config.operator = config.operator or MatchOperator.AND
+    config.blockDistance = config.blockDistance or self.blockRadius
+    config.blockDuration = config.blockDuration or 2.0
+    
+    for i, condition in ipairs(config.conditions) do
+        if not condition.type then
+            return false
+        end
+        -- FACING uses 'angle' instead of 'value', so skip value check for it
+        if condition.type ~= ConditionType.FACING and condition.value == nil then
+            return false
+        end
+    end
+    
+    self._threatConfigs[threatId] = config
+    return true
+end
+
+-- Remove a threat configuration
+function AutoBlock:removeThreat(threatId)
+    if self._threatConfigs[threatId] then
+        self._threatConfigs[threatId] = nil
+        return true
+    end
+    return false
+end
+
+-- Get all configured threats
+function AutoBlock:getAllThreats()
+    local threats = {}
+    for threatId, config in pairs(self._threatConfigs) do
+        threats[threatId] = config
+    end
+    return threats
+end
+
+-- Get threats by type
+function AutoBlock:getThreatsByType(isCombo)
+    local threats = {}
+    for threatId, config in pairs(self._threatConfigs) do
+        local configIsCombo = #config.conditions > 1
+        if configIsCombo == isCombo then
+            threats[threatId] = config
+        end
+    end
+    return threats
+end
+
+-- Configure detection settings
+function AutoBlock:configureDetection(settings)
+    for setting, value in pairs(settings) do
+        if self._detectionSettings[setting] ~= nil then
+            self._detectionSettings[setting] = value
+        end
+    end
+end
+
+-- Set the blocking radius
+function AutoBlock:setBlockRadius(radius)
+    if radius and radius > 0 then
+        self.blockRadius = radius
+    end
+end
+
+-- Get current blocking radius
+function AutoBlock:getBlockRadius()
+    return self.blockRadius
+end
+
+-- Get currently detected threats
+function AutoBlock:getCurrentThreats()
+    return self._currentThreats
+end
+
+-- OPTIMIZED: Main threat detection with throttling
+function AutoBlock:detectThreats()
+    local currentTime = tick()
+    if currentTime - self._lastDetectionRun < DETECTION_INTERVAL then
+        return
+    end
+    self._lastDetectionRun = currentTime
+
+    local localCharacter = self:_getValidatedLocalCharacter()
+    if not localCharacter then return end
+
+    self:_updateValidPlayers()
+    local myPosition = localCharacter.HumanoidRootPart.Position
+    local allDetectedThreats = {}
+    local threatCount = 0
+
+    -- Cache humanoid/HRP fora do loop
+    for i = 1, #self._validPlayers do
+        local player = self._validPlayers[i]
+        local character = player.Character
+        if character then
+            local hrp = character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character:FindFirstChild("Humanoid")
+            if hrp and humanoid then
+                -- Passe character, hrp, humanoid para as funções de verificação se desejar otimizar ainda mais
+                local playerThreats = self:_scanPlayerForThreats(player, myPosition)
+                for j = 1, #playerThreats do
+                    threatCount = threatCount + 1
+                    allDetectedThreats[threatCount] = playerThreats[j]
+                end
+            end
+        end
+    end
+
+    self:_updateBlockingState(allDetectedThreats)
+end
+
+-- Enable AutoBlock system
+function AutoBlock:enable()
+    if self.enabled then 
+        return false
+    end
+    
     self.enabled = true
     
     -- Sincronizar com StateManager
     if self.stateManager then
         self.stateManager:enableModule(self.moduleName)
     end
-
-    local lastCleanup = tick()
-
-    self._heartbeatConnection = RunService.Heartbeat:Connect(function()
-        self:updateMouseCache()
-
-        if tick() - lastCleanup > 5 then
-            self:cleanupTargetHistory()
-            lastCleanup = tick()
+    
+    -- Heartbeat runs after physics, ensuring character positions are up-to-date
+    self._connectionManager:add(RunService.Heartbeat:Connect(function()
+        if self.enabled then
+            self:detectThreats()
         end
-    end)
-
-    RemoteFunction.OnClientInvoke = function()
-        local character = LocalPlayer.Character
-        if not character then return self:getMouseFallback() end
-
-        local equippedTool = character:FindFirstChildOfClass("Tool")
-
-        local areaMarkers = Workspace:FindFirstChild("AreaMarkers")
-        if areaMarkers then
-            Mouse.TargetFilter = areaMarkers:FindFirstChild("The Arena")
-        end
-
-        if equippedTool and self.toolNames[equippedTool.Name] then
-            local targetNPC = self:getBestNPC(character)
-            if not targetNPC then return self:getMouseFallback() end
-
-            local npcHRP = targetNPC:FindFirstChild("HumanoidRootPart")
-            local npcHead = targetNPC:FindFirstChild("Head")
-            if not npcHRP or not npcHead then return self:getMouseFallback() end
-
-            self:updateTargetHistory(targetNPC)
-
-            local hitPosition
-
-            if equippedTool.Name == "Percutiens" then
-                local predictedPosition = self:calculateMovementPrediction(targetNPC, self.timeToHit)
-                if not predictedPosition then return self:getMouseFallback() end
-
-                local charHRP = character:FindFirstChild("HumanoidRootPart")
-                if not charHRP then return self:getMouseFallback() end
-
-                local dirVec = npcHRP.Position - charHRP.Position
-                if dirVec.Magnitude < 0.001 then return self:getMouseFallback() end
-
-                hitPosition = predictedPosition + dirVec.Unit * random(self.studsBehindMin, self.studsBehindMax)
-            else
-                hitPosition = self:calculateMovementPrediction(targetNPC, self.timeToHit)
-                if not hitPosition then return self:getMouseFallback() end
-            end
-
-            local marker = Instance.new("Part")
-            marker.Anchored = true
-            marker.CanCollide = false
-            marker.Size = Vector3new(0.5, 0.5, 0.5)
-            marker.Color = Color3.new(0, 1, 0)
-            marker.Material = Enum.Material.Neon
-            marker.Position = hitPosition
-            marker.Parent = Workspace.CurrentCamera
-            Debris:AddItem(marker, 2)
-
-            local currentMarker = Instance.new("Part")
-            currentMarker.Anchored = true
-            currentMarker.CanCollide = false
-            currentMarker.Size = Vector3new(0.3, 0.3, 0.3)
-            currentMarker.Color = Color3.new(1, 0, 0)
-            currentMarker.Material = Enum.Material.Neon
-            currentMarker.Position = npcHead.Position
-            currentMarker.Parent = Workspace.CurrentCamera
-            Debris:AddItem(currentMarker, 2)
-
-            return {
-                Hit     = CFrame.new(hitPosition),
-                Target  = targetNPC,
-                UnitRay = self._mouseUnitRay,
-                X       = self._mouseX,
-                Y       = self._mouseY,
-            }
-        end
-
-        return self:getMouseFallback()
-    end
+    end))
+    
+    -- Clean player cache when a player leaves to prevent memory leaks
+    self._connectionManager:add(Players.PlayerRemoving:Connect(function(player)
+        self:_clearPlayerCache(player.Name)
+    end))
+    
+    return true
 end
 
-function AutoAim:disable()
-    if not self.enabled then return end
+-- Disable AutoBlock system
+function AutoBlock:disable()
+    if not self.enabled then
+        return false
+    end
+    
     self.enabled = false
     
     -- Sincronizar com StateManager
     if self.stateManager then
         self.stateManager:disableModule(self.moduleName)
     end
-
-    if self._heartbeatConnection then
-        self._heartbeatConnection:Disconnect()
-        self._heartbeatConnection = nil
+    
+    self._connectionManager:disconnectAll()
+    
+    -- Clear caches
+    self._playerCache = {}
+    self._validPlayers = {}
+    
+    if self._isCurrentlyBlocking then
+        self:triggerUnblock()
+        self._isCurrentlyBlocking = false
+        self._currentThreats = {}
     end
-
-    if RemoteFunction then
-        RemoteFunction.OnClientInvoke = nil
-    end
+    
+    return true
 end
 
-return AutoAim
+-- Check if system is currently enabled
+function AutoBlock:isEnabled()
+    return self.enabled
+end
+
+-- Check if currently blocking
+function AutoBlock:isCurrentlyBlocking()
+    return self._isCurrentlyBlocking
+end
+
+-- Get comprehensive system status
+function AutoBlock:getStatus()
+    local singleThreats = self:getThreatsByType(false)
+    local comboThreats = self:getThreatsByType(true)
+    
+    -- Count dict entries (# operator doesn't work on dictionaries in Lua)
+    local singleCount, comboCount = 0, 0
+    for _ in pairs(singleThreats) do singleCount = singleCount + 1 end
+    for _ in pairs(comboThreats) do comboCount = comboCount + 1 end
+    
+    return {
+        enabled = self.enabled,
+        currentlyBlocking = self._isCurrentlyBlocking,
+        blockRadius = self.blockRadius,
+        singleThreats = singleCount,
+        comboThreats = comboCount,
+        totalThreats = singleCount + comboCount,
+        currentActiveThreats = #self._currentThreats,
+        detectionSettings = self._detectionSettings,
+        lastDetectionTime = self._lastDetectionTime
+    }
+end
+
+-- Clean up and destroy the AutoBlock instance
+function AutoBlock:destroy()
+    self:disable()
+    
+    if self._connectionManager then
+        self._connectionManager:disconnectAll()
+        self._connectionManager = nil
+    end
+    
+    -- Clear all references
+    self._threatConfigs = nil
+    self._currentThreats = nil
+    self._playerCache = nil
+    self._validPlayers = nil
+    self._isCurrentlyBlocking = false
+end
+
+-- Optimized facing check
+function AutoBlock:_isFacing(player, target, maxAngle)
+    if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then return false end
+    if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then return false end
+    
+    local fromPos = player.Character.HumanoidRootPart.Position
+    local toPos = target.Character.HumanoidRootPart.Position
+    
+    -- Guard against identical positions (e.g. during respawn/teleport)
+    local delta = toPos - fromPos
+    if delta.Magnitude < 0.001 then
+        return true -- Same position = assume facing
+    end
+    
+    local lookVector = player.Character.HumanoidRootPart.CFrame.LookVector
+    local direction = delta.Unit
+    local dot = lookVector:Dot(direction)
+    
+    -- Clamp dot to [-1, 1] to prevent NaN from floating-point errors
+    dot = math.clamp(dot, -1, 1)
+    local angle = math_deg(math_acos(dot))
+    
+    return angle <= (maxAngle or 45)
+end
+
+-- Set threat block distance
+function AutoBlock:setThreatBlockDistance(threatId, distance)
+    local config = self._threatConfigs[threatId]
+    if config and distance and distance > 0 then
+        config.blockDistance = distance
+        return true
+    end
+    return false
+end
+
+-- Legacy compatibility methods (optimized)
+function AutoBlock:addAutoBlockableAnimation(animationId, skillName)
+    return self:addThreat("legacy_" .. animationId, {
+        name = skillName,
+        priority = 1,
+        conditions = {
+            {
+                type = ConditionType.ANIMATION,
+                value = animationId
+            }
+        }
+    })
+end
+
+function AutoBlock:removeAutoBlockableAnimation(animationId)
+    return self:removeThreat("legacy_" .. animationId)
+end
+
+function AutoBlock:getAutoBlockableAnimations()
+    local animationList = {}
+    for threatId, config in pairs(self._threatConfigs) do
+        if threatId:sub(1, 7) == "legacy_" and #config.conditions == 1 and 
+           config.conditions[1].type == ConditionType.ANIMATION then
+            table_insert(animationList, {
+                id = config.conditions[1].value,
+                name = config.name
+            })
+        end
+    end
+    return animationList
+end
+
+function AutoBlock:detectAttack()
+    self:detectThreats()
+end
+
+function AutoBlock:getDetectionSettings()
+    return self._detectionSettings
+end
+
+return AutoBlock
