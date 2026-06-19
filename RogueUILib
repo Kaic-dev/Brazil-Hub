@@ -1,6 +1,6 @@
 -- RogueUILib v3
--- Rich config panel per element. Gear icon only appears if :ConfigPanel(fn) is called.
--- Panel widgets: AddSection, AddSeparator, AddLabel, AddToggle, AddSlider,
+-- Config Panel rico por elemento. Gear só aparece se :ConfigPanel(fn) for chamado.
+-- Widgets do painel: AddSection, AddSeparator, AddLabel, AddToggle, AddSlider,
 --                    AddColorPicker, AddDropdown, AddKeybind, AddModeSelect
 
 local UserInputService = game:GetService("UserInputService")
@@ -110,6 +110,20 @@ local COLOR_PRESETS = {
     Color3.fromRGB(255,140,0),   Color3.fromRGB(200,50, 200),
 }
 
+local function registerPanelWidget(id, api, kind)
+    if not id or id == "" or not api then return end
+    if kind == "Toggle" then
+        RogueUI.Toggles[id] = api
+        TogglesTable[id] = api
+    elseif kind == "Slider" then
+        RogueUI.Sliders[id] = api
+    elseif kind == "Dropdown" then
+        RogueUI.Dropdowns[id] = api
+    elseif kind == "Color" then
+        OptionsTable[id] = api
+    end
+end
+
 local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, addCleanup)
 
     local panel = Instance.new("Frame")
@@ -193,7 +207,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     contentPad.Parent        = scroll
 
     local open           = false
-    local sliderDragging = false  -- prevents panel from closing while dragging sliders
+    local sliderDragging = false  -- impede fechamento ao arrastar sliders
     local activeSubMenu  = nil
     local activeSubMenuFrame = nil
 
@@ -305,7 +319,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         addCleanup(function() closePanel() end)
     end
 
-    -- ── Public API ───────────────────────────────────────────────────────────
+    -- ── API pública ───────────────────────────────────────────────────────────
     local panelAPI = {}
     local rowOrder = 0
     local function nextOrd() rowOrder = rowOrder + 1; return rowOrder end
@@ -388,14 +402,16 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         return api
     end
 
-    function panelAPI:AddToggle(labelText, defaultOrOpts, cb)
+    function panelAPI:AddToggle(idOrLabel, defaultOrOpts, cb)
+        local widgetId = nil
+        local labelText = idOrLabel
         local default = defaultOrOpts
-        if type(defaultOrOpts) == "table" and (defaultOrOpts.Default ~= nil or defaultOrOpts.Callback ~= nil) then
+        if type(defaultOrOpts) == "table" and (defaultOrOpts.Default ~= nil or defaultOrOpts.Callback ~= nil)
+            and defaultOrOpts.Min == nil and defaultOrOpts.Values == nil then
+            widgetId = idOrLabel
             default = defaultOrOpts.Default
             cb = defaultOrOpts.Callback
-            if defaultOrOpts.Text and (not labelText or labelText == "") then
-                labelText = defaultOrOpts.Text
-            end
+            labelText = defaultOrOpts.Text or idOrLabel
         end
 
         local row  = makeRow(22)
@@ -449,20 +465,22 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValue(v) setVal(v); self.Value = v end
         function api:OnChanged(fn) table.insert(callbacks, fn) end
         table.insert(callbacks, function(v) api.Value = v end)
+        registerPanelWidget(widgetId, api, "Toggle")
         return api
     end
 
-    function panelAPI:AddSlider(labelText, minOrOpts, max, default, rounding, cb)
+    function panelAPI:AddSlider(idOrLabel, minOrOpts, max, default, rounding, cb)
+        local widgetId = nil
+        local labelText = idOrLabel
         local min = minOrOpts
         if type(minOrOpts) == "table" and minOrOpts.Min ~= nil then
+            widgetId = idOrLabel
             min      = minOrOpts.Min
             max      = minOrOpts.Max
             default  = minOrOpts.Default
             rounding = minOrOpts.Rounding or 0
             cb       = minOrOpts.Callback
-            if minOrOpts.Text and (not labelText or labelText == "") then
-                labelText = minOrOpts.Text
-            end
+            labelText = minOrOpts.Text or idOrLabel
         end
 
         rounding = rounding or 0
@@ -550,17 +568,19 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValue(v) setSlider(v) end
         function api:OnChanged(fn) table.insert(callbacks,fn) end
         table.insert(callbacks, function(v) api.Value=v end)
+        registerPanelWidget(widgetId, api, "Slider")
         return api
     end
 
-    function panelAPI:AddColorPicker(labelText, defaultOrOpts, cb)
+    function panelAPI:AddColorPicker(idOrLabel, defaultOrOpts, cb)
+        local widgetId = nil
+        local labelText = idOrLabel
         local default = defaultOrOpts
         if type(defaultOrOpts) == "table" and (defaultOrOpts.Default ~= nil or defaultOrOpts.Callback ~= nil) then
+            widgetId = idOrLabel
             default  = defaultOrOpts.Default
             cb       = defaultOrOpts.Callback
-            if defaultOrOpts.Text and (not labelText or labelText == "") then
-                labelText = defaultOrOpts.Text
-            end
+            labelText = defaultOrOpts.Text or idOrLabel
         end
 
         default = default or Color3.fromRGB(255,255,255)
@@ -674,22 +694,24 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValueRGB(c) setColor(c) end
         function api:OnChanged(fn)  table.insert(callbacks,fn) end
         table.insert(callbacks, function(v) api.Value=v end)
+        registerPanelWidget(widgetId, api, "Color")
         return api
     end
 
-    function panelAPI:AddDropdown(labelText, valuesOrOpts, multi, default, cb)
+    function panelAPI:AddDropdown(idOrLabel, valuesOrOpts, multi, default, cb)
         -- Support both calling styles:
         -- 1) Positional:  AddDropdown("label", valuesArray, multi, default, cb)
-        -- 2) Table:       AddDropdown("label", { Values=..., Multi=..., Default=..., Callback=..., Text=... })
+        -- 2) Table:       AddDropdown("id", { Values=..., Multi=..., Default=..., Callback=..., Text=... })
+        local widgetId = nil
+        local labelText = idOrLabel
         local values = valuesOrOpts
         if type(valuesOrOpts) == "table" and valuesOrOpts.Values then
+            widgetId = idOrLabel
             values  = valuesOrOpts.Values
             multi   = valuesOrOpts.Multi or false
             default = valuesOrOpts.Default
             cb      = valuesOrOpts.Callback
-            if valuesOrOpts.Text and (not labelText or labelText == "") then
-                labelText = valuesOrOpts.Text
-            end
+            labelText = valuesOrOpts.Text or idOrLabel
         end
 
         local row = makeRow(38)
@@ -913,8 +935,16 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValue(v)
             if multi then
                 selected={}
-                if type(v)=="table" then for _,x in ipairs(v) do selected[x]=true end
-                else selected[v]=true end
+                if type(v)=="table" then
+                    for _, x in ipairs(v) do selected[x] = true end
+                    for key, state in pairs(v) do
+                        if type(key) == "string" and state == true then
+                            selected[key] = true
+                        end
+                    end
+                else
+                    selected[v] = true
+                end
             else selected={}; selected[v]=true end
             btn.Text=displayText(); populateMenu()
             local fv=getVal(); self.Value=fv
@@ -923,6 +953,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         function api:SetValues(nv) values=nv; populateMenu() end
         function api:OnChanged(fn)  table.insert(callbacks,fn) end
         table.insert(callbacks, function(v) api.Value=v end)
+        registerPanelWidget(widgetId, api, "Dropdown")
         return api
     end
 
@@ -960,7 +991,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             btn.Text        = "["..newKey.Name.."]"
             btn.TextColor3  = theme.TextActive
             bStroke.Color   = theme.BorderInactive
-            if listenConn then pcall(function() listenConn:Disconnect() end); listenConn=nil end
+            if listenConn then listenConn:Disconnect(); listenConn=nil end
             for _,fn in ipairs(callbacks) do task.spawn(fn,newKey) end
         end
 
@@ -971,18 +1002,11 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick(); listening=true
             btn.Text="[...]"; btn.TextColor3=theme.TextNormal
             bStroke.Color=theme.BorderColor
-            -- Temporary connection: managed manually to avoid stacking listeners.
-            -- stopListening() disconnects listenConn as soon as a key is pressed.
             listenConn=UserInputService.InputBegan:Connect(function(input)
                 if input.UserInputType==Enum.UserInputType.Keyboard then
                     stopListening(input.KeyCode)
                 end
             end)
-        end)
-
-        -- Safety cleanup in case the panel is destroyed while listening for input
-        addCleanup(function()
-            if listenConn then pcall(function() listenConn:Disconnect() end); listenConn=nil end
         end)
 
         local api = { Value=curKey }
@@ -1381,15 +1405,15 @@ function RogueUI:CreateWindow(options)
                 local text       = opts.Text     or id
                 local default    = opts.Default  or false
                 local cb         = opts.Callback or function() end
-                local hasKeybind = true           -- always shown; user sets the key via ConfigPanel
+                local hasKeybind = opts.Keybind  or false
                 local defKey     = opts.KeybindKey
 
                 local toggleData = {
                     Value              = default,
                     OnChangedCallbacks = { cb },
-                    KeybindEnabled     = defKey ~= nil,
+                    KeybindEnabled     = hasKeybind and (defKey~=nil),
                     KeybindKey         = defKey or nil,
-                    KeybindMode        = opts.KeybindMode or "Toggle",
+                    KeybindMode        = "Toggle",
                     _configPanel       = nil,
                 }
                 RogueUI.Toggles[id] = toggleData
@@ -1553,18 +1577,18 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    -- State section
-                    panelInst:AddSection("State")
-                    local stToggle = panelInst:AddToggle("Enabled", default, function(v) setVal(v) end)
+                    -- Seção Estado
+                    panelInst:AddSection("Estado")
+                    local stToggle = panelInst:AddToggle("Ativado", default, function(v) setVal(v) end)
                     table.insert(toggleData.OnChangedCallbacks, function(v) stToggle:SetValue(v) end)
 
-                    -- Keybind section
+                    -- Seção Keybind
                     if hasKeybind then
                         panelInst:AddSeparator()
                         panelInst:AddSection("Keybind")
 
                         local kbEnabled = panelInst:AddModeSelect(
-                            "Status", {"Active","Inactive"},
+                            "Status", {"Ativo","Inativo"},
                             toggleData.KeybindEnabled and 1 or 2,
                             function(idx)
                                 toggleData.KeybindEnabled = (idx==1)
@@ -1572,7 +1596,7 @@ function RogueUI:CreateWindow(options)
                             end)
 
                         panelInst:AddKeybind(
-                            "Key",
+                            "Tecla",
                             toggleData.KeybindKey or Enum.KeyCode.Unknown,
                             function(newKey)
                                 toggleData.KeybindKey     = newKey
@@ -1582,7 +1606,7 @@ function RogueUI:CreateWindow(options)
                             end)
 
                         panelInst:AddModeSelect(
-                            "Mode", {"Toggle","Hold"}, 1,
+                            "Modo", {"Toggle","Hold"}, 1,
                             function(_,val) toggleData.KeybindMode=val end)
                     end
 
@@ -1706,12 +1730,12 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    panelInst:AddSection("Value")
+                    panelInst:AddSection("Valor")
                     local valLbl   = panelInst:AddLabel(text..": "..tostring(sliderData.Value))
                     local slWidget = panelInst:AddSlider("", min, max, default, rounding,
                         function(v) setSlider(v) end)
 
-                    -- Keeps both sliders in sync when dragging the groupbox slider
+                    -- Sincroniza ambos ao arrastar o slider da groupbox
                     table.insert(sliderData.OnChangedCallbacks, function(v)
                         valLbl:SetText(text..": "..tostring(v))
                         slWidget:SetValue(v)
@@ -1960,7 +1984,7 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    panelInst:AddSection("Current Selection")
+                    panelInst:AddSection("Seleção Atual")
                     local selLbl = panelInst:AddLabel(displayText())
                     table.insert(dropData.OnChangedCallbacks, function()
                         selLbl:SetText(displayText())
@@ -2066,8 +2090,7 @@ function RogueUI:CreateWindow(options)
                         listening=false; pb.Text="["..tostring(nk.Name).."]"
                         pb.TextColor3=RogueUI.Theme.TextActive; pbStroke.Color=RogueUI.Theme.BorderInactive
                         kd.Value=nk
-                        -- Disconnects manually: does not rely on addCleanup for temporary connections
-                        if conn then pcall(function() conn:Disconnect() end); conn=nil end
+                        if conn then conn:Disconnect(); conn=nil end
                         if id=="MenuKeybind" then self_Window.ToggleKeybind=kd end
                         if opts2.Callback then task.spawn(opts2.Callback,nk) end
                         for _,f in ipairs(kd.OnChangedCallbacks) do task.spawn(f,nk) end
@@ -2077,17 +2100,9 @@ function RogueUI:CreateWindow(options)
                         if listening then return end
                         playClick(); listening=true; pb.Text="[...]"
                         pb.TextColor3=RogueUI.Theme.TextNormal; pbStroke.Color=RogueUI.Theme.BorderColor
-                        -- Temporary connection: managed manually to avoid stacking
-                        -- entries in CleanupConnections on every click.
-                        -- stopL() disconnects conn as soon as a key is pressed.
-                        conn=UserInputService.InputBegan:Connect(function(input)
+                        conn=addCleanup(UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType==Enum.UserInputType.Keyboard then stopL(input.KeyCode) end
-                        end)
-                    end)
-
-                    -- Safety cleanup in case the window is destroyed while listening for input
-                    addCleanup(function()
-                        if conn then pcall(function() conn:Disconnect() end); conn=nil end
+                        end))
                     end)
 
                     function kd:SetValue(nk) stopL(nk) end
