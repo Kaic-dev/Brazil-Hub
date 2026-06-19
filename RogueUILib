@@ -1,6 +1,6 @@
 -- RogueUILib v3
--- Config Panel rico por elemento. Gear só aparece se :ConfigPanel(fn) for chamado.
--- Widgets do painel: AddSection, AddSeparator, AddLabel, AddToggle, AddSlider,
+-- Rich config panel per element. Gear icon only appears if :ConfigPanel(fn) is called.
+-- Panel widgets: AddSection, AddSeparator, AddLabel, AddToggle, AddSlider,
 --                    AddColorPicker, AddDropdown, AddKeybind, AddModeSelect
 
 local UserInputService = game:GetService("UserInputService")
@@ -193,7 +193,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
     contentPad.Parent        = scroll
 
     local open           = false
-    local sliderDragging = false  -- impede fechamento ao arrastar sliders
+    local sliderDragging = false  -- prevents panel from closing while dragging sliders
     local activeSubMenu  = nil
     local activeSubMenuFrame = nil
 
@@ -305,7 +305,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         addCleanup(function() closePanel() end)
     end
 
-    -- ── API pública ───────────────────────────────────────────────────────────
+    -- ── Public API ───────────────────────────────────────────────────────────
     local panelAPI = {}
     local rowOrder = 0
     local function nextOrd() rowOrder = rowOrder + 1; return rowOrder end
@@ -971,8 +971,8 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             playClick(); listening=true
             btn.Text="[...]"; btn.TextColor3=theme.TextNormal
             bStroke.Color=theme.BorderColor
-            -- Conexão temporária: gerenciada manualmente para não acumular listeners.
-            -- stopListening() desconecta listenConn assim que uma tecla é pressionada.
+            -- Temporary connection: managed manually to avoid stacking listeners.
+            -- stopListening() disconnects listenConn as soon as a key is pressed.
             listenConn=UserInputService.InputBegan:Connect(function(input)
                 if input.UserInputType==Enum.UserInputType.Keyboard then
                     stopListening(input.KeyCode)
@@ -980,7 +980,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             end)
         end)
 
-        -- Garante limpeza se o painel for destruído enquanto está em modo de escuta
+        -- Safety cleanup in case the panel is destroyed while listening for input
         addCleanup(function()
             if listenConn then pcall(function() listenConn:Disconnect() end); listenConn=nil end
         end)
@@ -1381,7 +1381,7 @@ function RogueUI:CreateWindow(options)
                 local text       = opts.Text     or id
                 local default    = opts.Default  or false
                 local cb         = opts.Callback or function() end
-                local hasKeybind = true           -- sempre visível; o usuário define a tecla pelo ConfigPanel
+                local hasKeybind = true           -- always shown; user sets the key via ConfigPanel
                 local defKey     = opts.KeybindKey
 
                 local toggleData = {
@@ -1553,18 +1553,18 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    -- Seção Estado
-                    panelInst:AddSection("Estado")
-                    local stToggle = panelInst:AddToggle("Ativado", default, function(v) setVal(v) end)
+                    -- State section
+                    panelInst:AddSection("State")
+                    local stToggle = panelInst:AddToggle("Enabled", default, function(v) setVal(v) end)
                     table.insert(toggleData.OnChangedCallbacks, function(v) stToggle:SetValue(v) end)
 
-                    -- Seção Keybind
+                    -- Keybind section
                     if hasKeybind then
                         panelInst:AddSeparator()
                         panelInst:AddSection("Keybind")
 
                         local kbEnabled = panelInst:AddModeSelect(
-                            "Status", {"Ativo","Inativo"},
+                            "Status", {"Active","Inactive"},
                             toggleData.KeybindEnabled and 1 or 2,
                             function(idx)
                                 toggleData.KeybindEnabled = (idx==1)
@@ -1572,7 +1572,7 @@ function RogueUI:CreateWindow(options)
                             end)
 
                         panelInst:AddKeybind(
-                            "Tecla",
+                            "Key",
                             toggleData.KeybindKey or Enum.KeyCode.Unknown,
                             function(newKey)
                                 toggleData.KeybindKey     = newKey
@@ -1582,7 +1582,7 @@ function RogueUI:CreateWindow(options)
                             end)
 
                         panelInst:AddModeSelect(
-                            "Modo", {"Toggle","Hold"}, 1,
+                            "Mode", {"Toggle","Hold"}, 1,
                             function(_,val) toggleData.KeybindMode=val end)
                     end
 
@@ -1706,12 +1706,12 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    panelInst:AddSection("Valor")
+                    panelInst:AddSection("Value")
                     local valLbl   = panelInst:AddLabel(text..": "..tostring(sliderData.Value))
                     local slWidget = panelInst:AddSlider("", min, max, default, rounding,
                         function(v) setSlider(v) end)
 
-                    -- Sincroniza ambos ao arrastar o slider da groupbox
+                    -- Keeps both sliders in sync when dragging the groupbox slider
                     table.insert(sliderData.OnChangedCallbacks, function(v)
                         valLbl:SetText(text..": "..tostring(v))
                         slWidget:SetValue(v)
@@ -1960,7 +1960,7 @@ function RogueUI:CreateWindow(options)
                         if panelInst:IsOpen() then panelInst:Close() else panelInst:Open() end
                     end)
 
-                    panelInst:AddSection("Seleção Atual")
+                    panelInst:AddSection("Current Selection")
                     local selLbl = panelInst:AddLabel(displayText())
                     table.insert(dropData.OnChangedCallbacks, function()
                         selLbl:SetText(displayText())
@@ -2066,7 +2066,7 @@ function RogueUI:CreateWindow(options)
                         listening=false; pb.Text="["..tostring(nk.Name).."]"
                         pb.TextColor3=RogueUI.Theme.TextActive; pbStroke.Color=RogueUI.Theme.BorderInactive
                         kd.Value=nk
-                        -- Desconecta manualmente: não depende do addCleanup para conexão temporária
+                        -- Disconnects manually: does not rely on addCleanup for temporary connections
                         if conn then pcall(function() conn:Disconnect() end); conn=nil end
                         if id=="MenuKeybind" then self_Window.ToggleKeybind=kd end
                         if opts2.Callback then task.spawn(opts2.Callback,nk) end
@@ -2077,15 +2077,15 @@ function RogueUI:CreateWindow(options)
                         if listening then return end
                         playClick(); listening=true; pb.Text="[...]"
                         pb.TextColor3=RogueUI.Theme.TextNormal; pbStroke.Color=RogueUI.Theme.BorderColor
-                        -- Conexão temporária: gerenciada manualmente para não acumular
-                        -- uma entrada em CleanupConnections a cada clique.
-                        -- stopL() desconecta conn assim que uma tecla é pressionada.
+                        -- Temporary connection: managed manually to avoid stacking
+                        -- entries in CleanupConnections on every click.
+                        -- stopL() disconnects conn as soon as a key is pressed.
                         conn=UserInputService.InputBegan:Connect(function(input)
                             if input.UserInputType==Enum.UserInputType.Keyboard then stopL(input.KeyCode) end
                         end)
                     end)
 
-                    -- Garante limpeza se a janela for destruída enquanto está em modo de escuta
+                    -- Safety cleanup in case the window is destroyed while listening for input
                     addCleanup(function()
                         if conn then pcall(function() conn:Disconnect() end); conn=nil end
                     end)
