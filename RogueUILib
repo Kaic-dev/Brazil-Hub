@@ -812,16 +812,25 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                     if not selected[optVal] then opt.TextColor3=theme.TextNormal end
                 end)
                 opt.MouseButton1Click:Connect(function()
+                    print("[DD-DEBUG] Click! label:", labelText, "opt:", optVal, "multi:", multi)
                     if multi then
                         selected[optVal]=not selected[optVal]
                         opt.TextColor3=selected[optVal] and theme.TextActive or theme.TextNormal
                         btn.Text=displayText(); playClick()
                         local v=getVal()
+                        print("[DD-DEBUG] Multi fire callbacks, count:", #callbacks)
                         for _,fn in ipairs(callbacks) do task.spawn(fn,v) end
                     else
+                        print("[DD-DEBUG] Single-select path for:", optVal)
                         selected={}; selected[optVal]=true
-                        btn.Text=tostring(optVal); closeMenu(); populateMenu()
+                        btn.Text=tostring(optVal)
+                        print("[DD-DEBUG] btn.Text set to:", btn.Text)
+                        closeMenu()
+                        print("[DD-DEBUG] closeMenu done")
+                        populateMenu()
+                        print("[DD-DEBUG] populateMenu done, callbacks:", #callbacks)
                         for _,fn in ipairs(callbacks) do task.spawn(fn,optVal) end
+                        print("[DD-DEBUG] callbacks fired")
                     end
                 end)
             end
