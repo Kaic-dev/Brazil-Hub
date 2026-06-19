@@ -264,7 +264,9 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
 
-            local mp = UserInputService:GetMouseLocation()
+            -- Use input.Position (screen coords) + GuiInset for reliable matching with AbsolutePosition
+            local gi = game:GetService("GuiService"):GetGuiInset()
+            local mp = Vector2.new(input.Position.X, input.Position.Y + gi.Y)
 
             -- Check if click is inside the panel itself
             local pp = panel.AbsolutePosition
@@ -852,7 +854,8 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 if input.UserInputType~=Enum.UserInputType.MouseButton1
                 and input.UserInputType~=Enum.UserInputType.Touch then return end
                 
-                local mp=UserInputService:GetMouseLocation()
+                local gi=game:GetService("GuiService"):GetGuiInset()
+                local mp=Vector2.new(input.Position.X, input.Position.Y + gi.Y)
                 local mp2=menuFrame.AbsolutePosition; local ms=menuFrame.AbsoluteSize
                 local bp2=btn.AbsolutePosition;       local bs2=btn.AbsoluteSize
                 local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
@@ -1796,9 +1799,11 @@ function RogueUI:CreateWindow(options)
                     if input.UserInputType~=Enum.UserInputType.MouseButton1
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
                     local gen = openGen
+                    local rawPos = input.Position
                     task.defer(function()
                         if not open or openGen ~= gen then return end
-                        local mp=UserInputService:GetMouseLocation()
+                        local gi=game:GetService("GuiService"):GetGuiInset()
+                        local mp=Vector2.new(rawPos.X, rawPos.Y + gi.Y)
                         local mp2=menu.AbsolutePosition; local ms=menu.AbsoluteSize
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
