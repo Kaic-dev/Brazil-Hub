@@ -574,6 +574,29 @@ if connMgr then
     end)
 end
 
+-- ─── StateManager (Gerenciamento Centralizado) ────────────────────────────────
+
+local StateManager = safeLoad("StateManager/StateManager", "StateManager")
+local stateManager = StateManager and StateManager.new() or nil
+
+if stateManager then
+    -- Registrar todos os módulos com dados iniciais
+    stateManager:registerModule("FFHandler", { ffCount = 0, billboardCount = 0, billboardMaxDistance = 125, billboardTextSize = 18 })
+    stateManager:registerModule("Intent", { intentCount = 0, activeTools = {}, maxDistance = 60 })
+    stateManager:registerModule("PlayerESP", { espCount = 0, maxDistance = 500, textSize = 14, enabled = false })
+    stateManager:registerModule("BetterLeaderboard", { playerCount = 0, enabled = false, prestigeLevel = 0 })
+    stateManager:registerModule("NoFog", { fogSaved = false, fogStart = 0, fogEnd = 0 })
+    stateManager:registerModule("auto_block", { blockCount = 0, threatCount = 0, blocksPerSecond = 0 })
+    stateManager:registerModule("Auto-Aim", { aimsPerSecond = 0, currentTarget = nil, targetDistance = 0 })
+    
+    -- Deixar globally acessível para debugging
+    _G.BrazilHubStateManager = stateManager
+    
+    print("[BrazilHub] StateManager inicializado ✓")
+else
+    warn("[BrazilHub] Falha ao carregar StateManager")
+end
+
 -- ─── Instâncias de módulos ────────────────────────────────────────────────────
 
 local function safeNew(module, name, ...)
@@ -582,6 +605,10 @@ local function safeNew(module, name, ...)
         return nil
     end
     local args = { ... }
+    -- Adicionar StateManager como primeiro argumento se disponível
+    if stateManager then
+        table.insert(args, 1, stateManager)
+    end
     local ok, inst = pcall(function() return module.new(table.unpack(args)) end)
     if not ok then
         warn("[BrazilHub] Erro ao instanciar:", name, inst)
