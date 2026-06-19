@@ -1301,6 +1301,241 @@ local function createMiscTab(miscTab)
     attachClick(labels.script,  "Script",     connMgr)
 end
 
+-- ─── Server Hop Tab ───────────────────────────────────────────────────────────
+
+local function createServerHopTab(serverHopTab)
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+    -- ── Estado interno ────────────────────────────────────────────────────────
+    local serverList      = {}   -- lista de servidores parseada
+    local filterRegion    = "All"
+    local sortMode        = "Players"
+    local selectedJobId   = nil
+
+    -- ── Helpers ───────────────────────────────────────────────────────────────
+    local function readValue(folder, name)
+        local v = folder:FindFirstChild(name)
+        if not v then return nil end
+        return v.Value
+    end
+
+    local function parseServers()
+        serverList = {}
+        local serverInfo = ReplicatedStorage:FindFirstChild("ServerInfo")
+        if not serverInfo then return end
+
+        for _, jobFolder in ipairs(serverInfo:GetChildren()) do
+            if jobFolder:IsA("Folder") then
+                local entry = {
+                    JobId      = jobFolder.Name,
+                    ServerName = readValue(jobFolder, "ServerName") or jobFolder.Name,
+                    Region     = readValue(jobFolder, "Region")     or "?",
+                    Players    = readValue(jobFolder, "Players")    or 0,
+                    Houses     = readValue(jobFolder, "Houses")     or 0,
+                    Lifespan   = readValue(jobFolder, "Lifespan")   or 0,
+                    Version    = readValue(jobFolder, "Version")    or "?",
+                    Origin     = readValue(jobFolder, "Origin")     or "?",
+                    LastHeardFrom = readValue(jobFolder, "LastHeardFrom") or 0,
+                }
+                serverList[#serverList + 1] = entry
+            end
+        end
+    end
+
+    local function getRegions()
+        local seen, list = {}, { "All" }
+        for _, s in ipairs(serverList) do
+            if not seen[s.Region] then
+                seen[s.Region] = true
+                list[#list + 1] = s.Region
+            end
+        end
+        return list
+    end
+
+    local function filteredAndSorted()
+        local result = {}
+        for _, s in ipairs(serverList) do
+            if filterRegion == "All" or s.Region == filterRegion then
+                result[#result + 1] = s
+            end
+        end
+        if sortMode == "Players" then
+            table.sort(result, function(a, b) return (a.Players or 0) > (b.Players or 0) end)
+        elseif sortMode == "Houses" then
+            table.sort(result, function(a, b) return (a.Houses or 0) > (b.Houses or 0) end)
+        elseif sortMode == "Lifespan" then
+            table.sort(result, function(a, b) return (a.Lifespan or 0) < (b.Lifespan or 0) end)
+        elseif sortMode == "Name" then
+            table.sort(result, function(a, b) return tostring(a.ServerName) < tostring(b.ServerName) end)
+        end
+        return result
+    end
+
+    local function formatAge(secs)
+        if type(secs) ~= "number" or secs <= 0 then return "?" end
+        local m = math.floor(secs / 60)
+        local s = secs % 60
+        if m >= 60 then
+            return string.format("%dh%02dm", math.floor(m/60), m%60)
+        end
+        return string.format("%dm%02ds", m, s)
+    end
+
+    -- ── Layout ────────────────────────────────────────────────────────────────
+
+    -- Coluna esquerda: lista de servers
+    local listGroup = serverHopTab:AddLeftGroupbox("Servers")
+
+    -- Status / contagem
+    local statusLabel = listGroup:AddLabel("No servers loaded", true)
+
+    -- Controles de filtro e sort
+    listGroup:AddLabel("Region")
+    local regionDrop = listGroup:AddDropdown("SHRegionFilter", {
+        Values   = { "All" },
+        Default  = "All",
+        Text     = "Filter by Region",
+        Callback = function(v)
+            filterRegion = v
+        end,
+    })
+
+    listGroup:AddLabel("Sort by")
+    listGroup:AddDropdown("SHSortMode", {
+        Values   = { "Players", "Houses", "Lifespan", "Name" },
+        Default  = "Players",
+        Text     = "Sort by",
+        Callback = function(v)
+            sortMode = v
+        end,
+    })
+
+    -- Botão de refresh
+    listGroup:AddButton("Refresh List", function()
+        parseServers()
+        local regions = getRegions()
+        pcall(function() regionDrop:SetValues(regions) end)
+        local servers  = filteredAndSorted()
+        local count    = #servers
+        statusLabel:SetText(count .. " server(s) found")
+    end)
+
+    -- Separador visual + instrução
+    listGroup:AddLabel("── Server List ──")
+    local hintLabel = listGroup:AddLabel(
+        'Click "Refresh List" to load servers.\nThen select one on the right panel.',
+        true
+    )
+
+    -- Botão de hop (só ativo quando um server está selecionado)
+    local hopLabel  = listGroup:AddLabel("No server selected", true)
+    listGroup:AddButton("Hop to Selected Server", function()
+        if not selectedJobId then
+            hopLabel:SetText("Select a server first!")
+            return
+        end
+        hopLabel:SetText("Hopping... [" .. string.sub(selectedJobId, 1, 8) .. "...]")
+        -- Funcionalidade real será implementada depois
+        -- game:GetService("TeleportService"):TeleportToPlaceInstance(...)
+    end)
+
+    -- Coluna direita: detalhes do server selecionado + lista navegável
+    local detailGroup = serverHopTab:AddRightGroupbox("Server Details")
+
+    local nameLabel    = detailGroup:AddLabel("Name:    —", true)
+    local regionLabel  = detailGroup:AddLabel("Region:  —")
+    local playersLabel = detailGroup:AddLabel("Players: —")
+    local housesLabel  = detailGroup:AddLabel("Houses:  —")
+    local versionLabel = detailGroup:AddLabel("Version: —")
+    local originLabel  = detailGroup:AddLabel("Origin:  —")
+    local lifespanLabel= detailGroup:AddLabel("Lifespan:—")
+    local ageLabel     = detailGroup:AddLabel("Age:     —")
+    local jobLabel     = detailGroup:AddLabel("JobId:   —", true)
+
+    local function showServerDetails(entry)
+        if not entry then
+            nameLabel:SetText("Name:    —")
+            regionLabel:SetText("Region:  —")
+            playersLabel:SetText("Players: —")
+            housesLabel:SetText("Houses:  —")
+            versionLabel:SetText("Version: —")
+            originLabel:SetText("Origin:  —")
+            lifespanLabel:SetText("Lifespan:—")
+            ageLabel:SetText("Age:     —")
+            jobLabel:SetText("JobId:   —")
+            return
+        end
+        nameLabel:SetText("Name:    " .. tostring(entry.ServerName))
+        regionLabel:SetText("Region:  " .. tostring(entry.Region))
+        playersLabel:SetText("Players: " .. tostring(entry.Players))
+        housesLabel:SetText("Houses:  " .. tostring(entry.Houses))
+        versionLabel:SetText("Version: " .. tostring(entry.Version))
+        originLabel:SetText("Origin:  " .. tostring(entry.Origin))
+        lifespanLabel:SetText("Lifespan:" .. formatAge(entry.Lifespan))
+        ageLabel:SetText("Age:     " .. formatAge(entry.LastHeardFrom))
+        jobLabel:SetText("JobId:   " .. tostring(entry.JobId))
+    end
+
+    detailGroup:AddLabel("── Pick Server ──")
+
+    -- Navegação por índice simples (prev / next)
+    local currentIndex = 1
+
+    local function getServersNow()
+        return filteredAndSorted()
+    end
+
+    local function updateNavigator()
+        local servers = getServersNow()
+        if #servers == 0 then
+            selectedJobId = nil
+            hopLabel:SetText("No server selected")
+            showServerDetails(nil)
+            statusLabel:SetText("0 server(s) – hit Refresh")
+            return
+        end
+        currentIndex  = math.clamp(currentIndex, 1, #servers)
+        local entry   = servers[currentIndex]
+        selectedJobId = entry.JobId
+        showServerDetails(entry)
+        statusLabel:SetText(currentIndex .. " / " .. #servers .. " server(s)")
+        hopLabel:SetText("Selected: " .. tostring(entry.ServerName))
+    end
+
+    detailGroup:AddButton("◀  Previous", function()
+        currentIndex = currentIndex - 1
+        if currentIndex < 1 then currentIndex = math.max(1, #getServersNow()) end
+        updateNavigator()
+    end)
+
+    detailGroup:AddButton("Next  ▶", function()
+        local servers = getServersNow()
+        currentIndex = currentIndex + 1
+        if currentIndex > #servers then currentIndex = 1 end
+        updateNavigator()
+    end)
+
+    -- Auto-refresh a cada 30s quando ServerInfo existir
+    if connMgr then
+        local lastRefresh = 0
+        connMgr:add(RunService.Heartbeat:Connect(function()
+            local now = os.clock()
+            if now - lastRefresh < 30 then return end
+            lastRefresh = now
+            local ok2 = pcall(function()
+                local si = ReplicatedStorage:FindFirstChild("ServerInfo")
+                if not si then return end
+                parseServers()
+                local regions = getRegions()
+                pcall(function() regionDrop:SetValues(regions) end)
+                updateNavigator()
+            end)
+            if not ok2 then end
+        end), "serverHop.AutoRefresh")
+    end
+end
+
 -- ─── UI Settings Tab ──────────────────────────────────────────────────────────
 
 local function createUISettingsTab(uiSettingsTab, window)
@@ -1367,6 +1602,7 @@ local function main()
         Combat     = window:AddTab("Combat"),
         Visuals    = window:AddTab("Visuals"),
         Misc       = window:AddTab("Misc"),
+        ServerHop  = window:AddTab("Server Hop"),
         UISettings = window:AddTab("UI Settings"),
     }
 
@@ -1380,6 +1616,7 @@ local function main()
     createCombatTab(tabs.Combat, fovManager)
     createVisualsTab(tabs.Visuals)
     createMiscTab(tabs.Misc)
+    createServerHopTab(tabs.ServerHop)
     createUISettingsTab(tabs.UISettings, window)
     setupManagers(tabs.UISettings, window, fovManager)
 
