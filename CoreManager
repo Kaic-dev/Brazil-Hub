@@ -10,6 +10,7 @@
 --     · FFDetector→ Billboard Distance, Text Size
 --     · Fly       → Speed
 --     · TrinketESP→ Distance, Filter, Fields, Text, Billboard (NOVO v3.1)
+--     · SaveManager persiste widgets do ConfigPanel via IDs registrados na Library
 -- [D] createUISettingsTab: ToggleKeybind agora lido de self_Window diretamente
 -- [E] Library.OnUnload → window.OnUnload (self_Window não tem .OnUnload; cleanup
 --     feito via window:Unload() que já chama CleanupConnections)
@@ -383,16 +384,18 @@ end
 
 function SaveManager:Save(name)
     if not name or name == "" then return false end
+    local lib = self.Library
+    if not lib then return false end
     local HttpService = game:GetService("HttpService")
     local data = { Toggles = { __empty = true }, Options = { __empty = true } }
 
-    for id, toggle in pairs(Library.Toggles or {}) do
+    for id, toggle in pairs(lib.Toggles or {}) do
         if not self.IgnoreIndexes[id] then
             local val = toggle.Value
             if val ~= nil then data.Toggles[id] = val end
         end
     end
-    for id, slider in pairs(Library.Sliders or {}) do
+    for id, slider in pairs(lib.Sliders or {}) do
         if not self.IgnoreIndexes[id] then
             local val = slider.Value
             if type(val) == "number" then
@@ -400,7 +403,7 @@ function SaveManager:Save(name)
             end
         end
     end
-    for id, dropdown in pairs(Library.Dropdowns or {}) do
+    for id, dropdown in pairs(lib.Dropdowns or {}) do
         if not self.IgnoreIndexes[id] then
             local val = dropdown.Value
             if type(val) == "table" then
@@ -430,6 +433,8 @@ end
 
 function SaveManager:Load(name)
     if not name or name == "" then return false end
+    local lib = self.Library
+    if not lib then return false end
     local filePath = self.Folder .. "/configs/" .. name .. ".json"
     if not safeIsFile(filePath) then return false end
     local content = safeReadFile(filePath)
@@ -441,7 +446,7 @@ function SaveManager:Load(name)
     if data.Toggles then
         for id, state in pairs(data.Toggles) do
             if id == "__empty" then continue end
-            local t = Library.Toggles and Library.Toggles[id]
+            local t = lib.Toggles and lib.Toggles[id]
             if t and not self.IgnoreIndexes[id] then
                 pcall(function() t:SetValue(state) end)
             end
@@ -454,10 +459,10 @@ function SaveManager:Load(name)
                 pcall(function()
                     if type(optData) ~= "table" or not optData.Type then return end
                     if optData.Type == "Value" then
-                        local s = Library.Sliders and Library.Sliders[id]
+                        local s = lib.Sliders and lib.Sliders[id]
                         if s then s:SetValue(optData.Value) end
                     elseif optData.Type == "Dropdown" then
-                        local d = Library.Dropdowns and Library.Dropdowns[id]
+                        local d = lib.Dropdowns and lib.Dropdowns[id]
                         if d then d:SetValue(optData.Value) end
                     elseif optData.Type == "Color" then
                         local opt = getgenv().Options[id]
@@ -584,7 +589,7 @@ if stateManager then
     stateManager:registerModule("FFHandler", { ffCount = 0, billboardCount = 0, billboardMaxDistance = 125, billboardTextSize = 18 })
     stateManager:registerModule("Intent", { intentCount = 0, activeTools = {}, maxDistance = 60 })
     stateManager:registerModule("PlayerESP", { espCount = 0, maxDistance = 500, textSize = 14, enabled = false })
-    stateManager:registerModule("BetterLeaderboard", { playerCount = 0, enabled = false, prestigeLevel = 0 })
+    stateManager:registerModule("BetterLeaderboard", { playerCount = 0, enabled = false, prestigeLevel = 0, playerEdicts = {}, playerPrestigeLevels = {} })
     stateManager:registerModule("NoFog", { fogSaved = false, fogStart = 0, fogEnd = 0 })
     stateManager:registerModule("auto_block", { blockCount = 0, threatCount = 0, blocksPerSecond = 0 })
     stateManager:registerModule("Auto-Aim", { aimsPerSecond = 0, currentTarget = nil, targetDistance = 0 })
@@ -772,19 +777,40 @@ local function createCombatTab(combatTab, fovManager)
 
     aaToggle:ConfigPanel(function(panel)
         panel:AddSection("FOV")
-        panel:AddSlider("FOV (graus)", 5, 90, CONFIG.AUTO_AIM.DEFAULT_FOV, 0,
-            UICallbacks.onAutoAimFOVChanged)
+        panel:AddSlider("AutoAimFOV", {
+            Text     = "FOV (graus)",
+            Min      = 5,
+            Max      = 90,
+            Default  = CONFIG.AUTO_AIM.DEFAULT_FOV,
+            Rounding = 0,
+            Callback = UICallbacks.onAutoAimFOVChanged,
+        })
 
         panel:AddSection("Posicionamento")
-        panel:AddSlider("Studs Behind Min", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min, 0,
-            UICallbacks.onStudsBehindMinChanged)
-        panel:AddSlider("Studs Behind Max", 5, 50, CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max, 0,
-            UICallbacks.onStudsBehindMaxChanged)
+        panel:AddSlider("AutoAimStudsBehindMin", {
+            Text     = "Studs Behind Min",
+            Min      = 5,
+            Max      = 50,
+            Default  = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.min,
+            Rounding = 0,
+            Callback = UICallbacks.onStudsBehindMinChanged,
+        })
+        panel:AddSlider("AutoAimStudsBehindMax", {
+            Text     = "Studs Behind Max",
+            Min      = 5,
+            Max      = 50,
+            Default  = CONFIG.AUTO_AIM.DEFAULT_STUDS_BEHIND.max,
+            Rounding = 0,
+            Callback = UICallbacks.onStudsBehindMaxChanged,
+        })
 
         panel:AddSection("Ferramentas")
-        panel:AddDropdown("Tools", CONFIG.AUTO_AIM.AVAILABLE_TOOLS, true,
-            CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
-            function(selected)
+        panel:AddDropdown("AutoAimTools", {
+            Text     = "Tools",
+            Values   = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+            Multi    = true,
+            Default  = CONFIG.AUTO_AIM.AVAILABLE_TOOLS,
+            Callback = function(selected)
                 local clean = {}
                 for name, state in pairs(selected) do
                     if state then
@@ -794,7 +820,8 @@ local function createCombatTab(combatTab, fovManager)
                     end
                 end
                 UICallbacks.onAutoAimToolsChanged(clean)
-            end)
+            end,
+        })
     end)
 
     autoAimGroup:AddLabel("FOV Circle Color"):AddColorPicker("FOVCircleColor", {
@@ -860,19 +887,35 @@ local function createCombatTab(combatTab, fovManager)
 
         abToggle:ConfigPanel(function(panel)
             panel:AddSection("Skills")
-            panel:AddDropdown("Skills", skillOptions, true, skillOptions,
-                function(sel) applyThreatDropdown(skillOptions, sel) end)
+            panel:AddDropdown("AutoBlockSkills", {
+                Text     = "Skills",
+                Values   = skillOptions,
+                Multi    = true,
+                Default  = skillOptions,
+                Callback = function(sel) applyThreatDropdown(skillOptions, sel) end,
+            })
 
             panel:AddSection("Attack Types")
-            panel:AddDropdown("Attack Types", attackOptions, true, attackOptions,
-                function(sel) applyThreatDropdown(attackOptions, sel) end)
+            panel:AddDropdown("AutoBlockAttackTypes", {
+                Text     = "Attack Types",
+                Values   = attackOptions,
+                Multi    = true,
+                Default  = attackOptions,
+                Callback = function(sel) applyThreatDropdown(attackOptions, sel) end,
+            })
 
             panel:AddSection("Block Distance")
             for threatId, cfg in pairs(allThreats) do
-                panel:AddSlider(cfg.name, 5, 300, cfg.blockDistance or 50, 0,
-                    function(v)
+                panel:AddSlider("AutoBlockDist_" .. threatId, {
+                    Text     = cfg.name,
+                    Min      = 5,
+                    Max      = 300,
+                    Default  = cfg.blockDistance or 50,
+                    Rounding = 0,
+                    Callback = function(v)
                         ModuleInstances.autoBlock:setThreatBlockDistance(threatId, v)
-                    end)
+                    end,
+                })
             end
         end)
     end
@@ -894,21 +937,34 @@ local function createVisualsTab(visualsTab)
 
     espToggle:ConfigPanel(function(panel)
         panel:AddSection("Texto")
-        panel:AddSlider("Text Size", 7, 40, CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE, 0,
-            UICallbacks.onPlayerESPTextSizeChanged)
-        panel:AddColorPicker("Text Color", CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
-            UICallbacks.onPlayerESPTextColorChanged)
+        panel:AddSlider("PlayerESPTextSize", {
+            Text     = "Text Size",
+            Min      = 7,
+            Max      = 40,
+            Default  = CONFIG.PLAYER_ESP.DEFAULT_TEXT_SIZE,
+            Rounding = 0,
+            Callback = UICallbacks.onPlayerESPTextSizeChanged,
+        })
+        panel:AddColorPicker("PlayerESPTextColor", {
+            Text     = "Text Color",
+            Default  = CONFIG.PLAYER_ESP.DEFAULT_TEXT_COLOR,
+            Callback = UICallbacks.onPlayerESPTextColorChanged,
+        })
 
         if ModuleInstances.playerEsp and ModuleInstances.playerEsp.displayConfig then
             panel:AddSection("Campos")
             for configKey, defaultValue in pairs(ModuleInstances.playerEsp.displayConfig) do
-                local labelText  = configKey:gsub("show", ""):gsub("^%l", string.upper)
-                panel:AddToggle(labelText, defaultValue, function(val)
-                    ModuleInstances.playerEsp.displayConfig[configKey] = val
-                    if ModuleInstances.playerEsp.setDisplayConfig then
-                        ModuleInstances.playerEsp:setDisplayConfig()
-                    end
-                end)
+                local labelText = configKey:gsub("show", ""):gsub("^%l", string.upper)
+                panel:AddToggle("PlayerESP_" .. configKey, {
+                    Text     = labelText,
+                    Default  = defaultValue,
+                    Callback = function(val)
+                        ModuleInstances.playerEsp.displayConfig[configKey] = val
+                        if ModuleInstances.playerEsp.setDisplayConfig then
+                            ModuleInstances.playerEsp:setDisplayConfig()
+                        end
+                    end,
+                })
             end
         end
     end)
@@ -968,12 +1024,22 @@ local function createVisualsTab(visualsTab)
 
     ffToggle:ConfigPanel(function(panel)
         panel:AddSection("Billboard")
-        panel:AddSlider("Max Distance", 10, 300,
-            CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE, 0,
-            UICallbacks.onBillboardDistanceChanged)
-        panel:AddSlider("Text Size", 7, 40,
-            CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE, 0,
-            UICallbacks.onBillboardTextSizeChanged)
+        panel:AddSlider("FFBillboardDistance", {
+            Text     = "Max Distance",
+            Min      = 10,
+            Max      = 300,
+            Default  = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_DISTANCE,
+            Rounding = 0,
+            Callback = UICallbacks.onBillboardDistanceChanged,
+        })
+        panel:AddSlider("FFBillboardTextSize", {
+            Text     = "Text Size",
+            Min      = 7,
+            Max      = 40,
+            Default  = CONFIG.FF_DETECTOR.DEFAULT_BILLBOARD_TEXT_SIZE,
+            Rounding = 0,
+            Callback = UICallbacks.onBillboardTextSizeChanged,
+        })
     end)
 
     -- ── Other ─────────────────────────────────────────────────────────────────
@@ -1162,9 +1228,14 @@ local function createMiscTab(miscTab)
     flyToggle:ConfigPanel(function(panel)
         panel:AddSection("Velocidade")
         panel:AddLabel("WASD = direção  |  Space = subir  |  LShift = descer")
-        panel:AddSlider("Speed", CONFIG.FLY.MIN_SPEED, CONFIG.FLY.MAX_SPEED,
-            CONFIG.FLY.DEFAULT_SPEED, 0,
-            UICallbacks.onFlySpeedChanged)
+        panel:AddSlider("FlySpeed", {
+            Text     = "Speed",
+            Min      = CONFIG.FLY.MIN_SPEED,
+            Max      = CONFIG.FLY.MAX_SPEED,
+            Default  = CONFIG.FLY.DEFAULT_SPEED,
+            Rounding = 0,
+            Callback = UICallbacks.onFlySpeedChanged,
+        })
     end)
 
     -- ── Triggers ──────────────────────────────────────────────────────────────
