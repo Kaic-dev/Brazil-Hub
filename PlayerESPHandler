@@ -194,8 +194,10 @@ local FRAME_CONFIG = {
 local PlayerESP = {}
 PlayerESP.__index = PlayerESP
 
-function PlayerESP.new()
+function PlayerESP.new(stateManager)
     local self = setmetatable({}, PlayerESP)
+    self.stateManager = stateManager
+    self.moduleName = "PlayerESP"
     self.enabled = false
     self._connMgr = ConnectionManager.new()
     self._playerConnMgrs = {}
@@ -412,6 +414,12 @@ end
 
 function PlayerESP:enable()
     self.enabled = true
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:enableModule(self.moduleName)
+    end
+    
     self:cleanup()
     
     -- Conecta players existentes
@@ -441,6 +449,12 @@ end
 
 function PlayerESP:disable()
     self.enabled = false
+    
+    -- Sincronizar com StateManager
+    if self.stateManager then
+        self.stateManager:disableModule(self.moduleName)
+    end
+    
     self:cleanup()
 end
 
