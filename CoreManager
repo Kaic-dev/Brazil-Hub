@@ -1305,233 +1305,412 @@ end
 
 local function createServerHopTab(serverHopTab)
     local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local Theme = {
+        MainBackground  = Color3.fromRGB(12,  12,  14),
+        GroupBackground = Color3.fromRGB(16,  16,  18),
+        BorderColor     = Color3.fromRGB(115, 95,  65),
+        BorderInactive  = Color3.fromRGB(45,  45,  48),
+        TextActive      = Color3.fromRGB(205, 170, 105),
+        TextNormal      = Color3.fromRGB(229, 229, 224),
+        TextMuted       = Color3.fromRGB(130, 130, 132),
+        CardSelected    = Color3.fromRGB(28,  24,  18),
+        CardHover       = Color3.fromRGB(22,  20,  16),
+    }
 
-    -- ── Estado interno ────────────────────────────────────────────────────────
-    local serverList      = {}   -- lista de servidores parseada
-    local filterRegion    = "All"
-    local sortMode        = "Players"
-    local selectedJobId   = nil
+    -- ── Estado ───────────────────────────────────────────────────────────────
+    local serverList    = {}
+    local filterRegion  = "All"
+    local sortMode      = "Players"
+    local selectedEntry = nil
+    local cardFrames    = {}   -- { frame, entry, strokeInst } por card
 
-    -- ── Helpers ───────────────────────────────────────────────────────────────
-    local function readValue(folder, name)
-        local v = folder:FindFirstChild(name)
-        if not v then return nil end
-        return v.Value
+    -- ── Helpers seguros ──────────────────────────────────────────────────────
+    local function safeRead(folder, name)
+        local ok, val = pcall(function()
+            local v = folder:FindFirstChild(name)
+            return v and v.Value or nil
+        end)
+        return ok and val or nil
     end
 
-    local function parseServers()
-        serverList = {}
-        local serverInfo = ReplicatedStorage:FindFirstChild("ServerInfo")
-        if not serverInfo then return end
-
-        for _, jobFolder in ipairs(serverInfo:GetChildren()) do
-            if jobFolder:IsA("Folder") then
-                local entry = {
-                    JobId      = jobFolder.Name,
-                    ServerName = readValue(jobFolder, "ServerName") or jobFolder.Name,
-                    Region     = readValue(jobFolder, "Region")     or "?",
-                    Players    = readValue(jobFolder, "Players")    or 0,
-                    Houses     = readValue(jobFolder, "Houses")     or 0,
-                    Lifespan   = readValue(jobFolder, "Lifespan")   or 0,
-                    Version    = readValue(jobFolder, "Version")    or "?",
-                    Origin     = readValue(jobFolder, "Origin")     or "?",
-                    LastHeardFrom = readValue(jobFolder, "LastHeardFrom") or 0,
-                }
-                serverList[#serverList + 1] = entry
-            end
-        end
+    local function safeStr(v, fallback)
+        if v == nil then return fallback or "?" end
+        local ok, s = pcall(tostring, v)
+        return (ok and s ~= "") and s or (fallback or "?")
     end
 
-    local function getRegions()
-        local seen, list = {}, { "All" }
-        for _, s in ipairs(serverList) do
-            if not seen[s.Region] then
-                seen[s.Region] = true
-                list[#list + 1] = s.Region
-            end
-        end
-        return list
-    end
-
-    local function filteredAndSorted()
-        local result = {}
-        for _, s in ipairs(serverList) do
-            if filterRegion == "All" or s.Region == filterRegion then
-                result[#result + 1] = s
-            end
-        end
-        if sortMode == "Players" then
-            table.sort(result, function(a, b) return (a.Players or 0) > (b.Players or 0) end)
-        elseif sortMode == "Houses" then
-            table.sort(result, function(a, b) return (a.Houses or 0) > (b.Houses or 0) end)
-        elseif sortMode == "Lifespan" then
-            table.sort(result, function(a, b) return (a.Lifespan or 0) < (b.Lifespan or 0) end)
-        elseif sortMode == "Name" then
-            table.sort(result, function(a, b) return tostring(a.ServerName) < tostring(b.ServerName) end)
-        end
-        return result
+    local function safeNum(v, fallback)
+        if type(v) == "number" then return v end
+        return fallback or 0
     end
 
     local function formatAge(secs)
-        if type(secs) ~= "number" or secs <= 0 then return "?" end
-        local m = math.floor(secs / 60)
-        local s = secs % 60
-        if m >= 60 then
-            return string.format("%dh%02dm", math.floor(m/60), m%60)
-        end
-        return string.format("%dm%02ds", m, s)
+        local ok, result = pcall(function()
+            secs = safeNum(secs, 0)
+            if secs <= 0 then return "?" end
+            local m = math.floor(secs / 60)
+            local s = secs % 60
+            if m >= 60 then
+                return string.format("%dh%02dm", math.floor(m / 60), m % 60)
+            end
+            return string.format("%dm%02ds", m, s)
+        end)
+        return (ok and result) or "?"
     end
 
-    -- ── Layout ────────────────────────────────────────────────────────────────
+    local function parseServers()
+        local ok = pcall(function()
+            serverList = {}
+            local serverInfo = ReplicatedStorage:FindFirstChild("ServerInfo")
+            if not serverInfo then return end
+            for _, jobFolder in ipairs(serverInfo:GetChildren()) do
+                local ok2, entry = pcall(function()
+                    if not jobFolder:IsA("Folder") then return nil end
+                    return {
+                        JobId         = safeStr(jobFolder.Name, "?"),
+                        ServerName    = safeStr(safeRead(jobFolder, "ServerName"), jobFolder.Name),
+                        Region        = safeStr(safeRead(jobFolder, "Region"),     "?"),
+                        Players       = safeNum(safeRead(jobFolder, "Players"),    0),
+                        Houses        = safeNum(safeRead(jobFolder, "Houses"),     0),
+                        Lifespan      = safeNum(safeRead(jobFolder, "Lifespan"),   0),
+                        Version       = safeStr(safeRead(jobFolder, "Version"),    "?"),
+                        Origin        = safeStr(safeRead(jobFolder, "Origin"),     "?"),
+                        LastHeardFrom = safeNum(safeRead(jobFolder, "LastHeardFrom"), 0),
+                    }
+                end)
+                if ok2 and entry then
+                    serverList[#serverList + 1] = entry
+                end
+            end
+        end)
+        if not ok then serverList = {} end
+    end
 
-    -- Coluna esquerda: lista de servers
-    local listGroup = serverHopTab:AddLeftGroupbox("Servers")
+    local function getRegions()
+        local ok, result = pcall(function()
+            local seen, list = {}, { "All" }
+            for _, s in ipairs(serverList) do
+                local r = safeStr(s.Region, "?")
+                if not seen[r] then
+                    seen[r] = true
+                    list[#list + 1] = r
+                end
+            end
+            return list
+        end)
+        return (ok and result) or { "All" }
+    end
 
-    -- Status / contagem
-    local statusLabel = listGroup:AddLabel("No servers loaded", true)
+    local function filteredAndSorted()
+        local ok, result = pcall(function()
+            local out = {}
+            for _, s in ipairs(serverList) do
+                if filterRegion == "All" or safeStr(s.Region) == filterRegion then
+                    out[#out + 1] = s
+                end
+            end
+            if sortMode == "Players" then
+                table.sort(out, function(a, b)
+                    return safeNum(a.Players, 0) > safeNum(b.Players, 0)
+                end)
+            elseif sortMode == "Houses" then
+                table.sort(out, function(a, b)
+                    return safeNum(a.Houses, 0) > safeNum(b.Houses, 0)
+                end)
+            elseif sortMode == "Lifespan" then
+                table.sort(out, function(a, b)
+                    return safeNum(a.Lifespan, 0) < safeNum(b.Lifespan, 0)
+                end)
+            elseif sortMode == "Name" then
+                table.sort(out, function(a, b)
+                    return safeStr(a.ServerName) < safeStr(b.ServerName)
+                end)
+            end
+            return out
+        end)
+        return (ok and result) or {}
+    end
 
-    -- Controles de filtro e sort
-    listGroup:AddLabel("Region")
-    local regionDrop = listGroup:AddDropdown("SHRegionFilter", {
+    -- ── Coluna esquerda: controles ────────────────────────────────────────────
+    local ctrlGroup  = serverHopTab:AddLeftGroupbox("Server Hop")
+    local statusLabel = ctrlGroup:AddLabel("Click Refresh to load servers", true)
+
+    local regionDrop = ctrlGroup:AddDropdown("SHRegionFilter", {
         Values   = { "All" },
         Default  = "All",
-        Text     = "Filter by Region",
+        Text     = "Region",
         Callback = function(v)
-            filterRegion = v
+            pcall(function() filterRegion = safeStr(v, "All") end)
         end,
     })
 
-    listGroup:AddLabel("Sort by")
-    listGroup:AddDropdown("SHSortMode", {
+    ctrlGroup:AddDropdown("SHSortMode", {
         Values   = { "Players", "Houses", "Lifespan", "Name" },
         Default  = "Players",
         Text     = "Sort by",
         Callback = function(v)
-            sortMode = v
+            pcall(function() sortMode = safeStr(v, "Players") end)
         end,
     })
 
-    -- Botão de refresh
-    listGroup:AddButton("Refresh List", function()
-        parseServers()
-        local regions = getRegions()
-        pcall(function() regionDrop:SetValues(regions) end)
-        local servers  = filteredAndSorted()
-        local count    = #servers
-        statusLabel:SetText(count .. " server(s) found")
-    end)
+    -- ── Painel de detalhes do selecionado ─────────────────────────────────────
+    local hopBtn     -- declarado antes para ser referenciado no buildCards
+    local jobLabel   = ctrlGroup:AddLabel("", true)
 
-    -- Separador visual + instrução
-    listGroup:AddLabel("── Server List ──")
-    local hintLabel = listGroup:AddLabel(
-        'Click "Refresh List" to load servers.\nThen select one on the right panel.',
-        true
-    )
-
-    -- Botão de hop (só ativo quando um server está selecionado)
-    local hopLabel  = listGroup:AddLabel("No server selected", true)
-    listGroup:AddButton("Hop to Selected Server", function()
-        if not selectedJobId then
-            hopLabel:SetText("Select a server first!")
-            return
-        end
-        hopLabel:SetText("Hopping... [" .. string.sub(selectedJobId, 1, 8) .. "...]")
-        -- Funcionalidade real será implementada depois
-        -- game:GetService("TeleportService"):TeleportToPlaceInstance(...)
-    end)
-
-    -- Coluna direita: detalhes do server selecionado + lista navegável
-    local detailGroup = serverHopTab:AddRightGroupbox("Server Details")
-
-    local nameLabel    = detailGroup:AddLabel("Name:    —", true)
-    local regionLabel  = detailGroup:AddLabel("Region:  —")
-    local playersLabel = detailGroup:AddLabel("Players: —")
-    local housesLabel  = detailGroup:AddLabel("Houses:  —")
-    local versionLabel = detailGroup:AddLabel("Version: —")
-    local originLabel  = detailGroup:AddLabel("Origin:  —")
-    local lifespanLabel= detailGroup:AddLabel("Lifespan:—")
-    local ageLabel     = detailGroup:AddLabel("Age:     —")
-    local jobLabel     = detailGroup:AddLabel("JobId:   —", true)
-
-    local function showServerDetails(entry)
-        if not entry then
-            nameLabel:SetText("Name:    —")
-            regionLabel:SetText("Region:  —")
-            playersLabel:SetText("Players: —")
-            housesLabel:SetText("Houses:  —")
-            versionLabel:SetText("Version: —")
-            originLabel:SetText("Origin:  —")
-            lifespanLabel:SetText("Lifespan:—")
-            ageLabel:SetText("Age:     —")
-            jobLabel:SetText("JobId:   —")
-            return
-        end
-        nameLabel:SetText("Name:    " .. tostring(entry.ServerName))
-        regionLabel:SetText("Region:  " .. tostring(entry.Region))
-        playersLabel:SetText("Players: " .. tostring(entry.Players))
-        housesLabel:SetText("Houses:  " .. tostring(entry.Houses))
-        versionLabel:SetText("Version: " .. tostring(entry.Version))
-        originLabel:SetText("Origin:  " .. tostring(entry.Origin))
-        lifespanLabel:SetText("Lifespan:" .. formatAge(entry.Lifespan))
-        ageLabel:SetText("Age:     " .. formatAge(entry.LastHeardFrom))
-        jobLabel:SetText("JobId:   " .. tostring(entry.JobId))
+    local function clearDetails()
+        pcall(function()
+            selectedEntry = nil
+            statusLabel:SetText("No server selected")
+            jobLabel:SetText("")
+        end)
     end
 
-    detailGroup:AddLabel("── Pick Server ──")
-
-    -- Navegação por índice simples (prev / next)
-    local currentIndex = 1
-
-    local function getServersNow()
-        return filteredAndSorted()
+    local function showDetails(entry)
+        pcall(function()
+            if not entry then clearDetails() return end
+            selectedEntry = entry
+            local line = string.format(
+                "%s  |  %s  |  %d players  |  %d houses  |  v%s  |  Age: %s",
+                safeStr(entry.ServerName),
+                safeStr(entry.Region),
+                safeNum(entry.Players, 0),
+                safeNum(entry.Houses,  0),
+                safeStr(entry.Version),
+                formatAge(entry.LastHeardFrom)
+            )
+            statusLabel:SetText(line)
+            jobLabel:SetText("JobId: " .. safeStr(entry.JobId))
+        end)
     end
 
-    local function updateNavigator()
-        local servers = getServersNow()
-        if #servers == 0 then
-            selectedJobId = nil
-            hopLabel:SetText("No server selected")
-            showServerDetails(nil)
-            statusLabel:SetText("0 server(s) – hit Refresh")
-            return
+    -- ── Coluna direita: lista scrollável de cards ─────────────────────────────
+    local listGroup = serverHopTab:AddRightGroupbox("Servers")
+
+    local SCROLL_H = 260
+    local CARD_H   = 28
+    local CARD_PAD = 3
+
+    -- AddButton retorna o TextButton real, cujo .Parent é o content frame interno.
+    -- Usamos isso para injetar o ScrollingFrame no mesmo content, sem depender
+    -- de internals privados da RogueUILib além do que já é público.
+    local anchorBtn = listGroup:AddButton("", function() end)
+
+    local contentFrame = nil
+    pcall(function()
+        if typeof(anchorBtn) == "Instance" and anchorBtn:IsA("GuiObject") then
+            contentFrame = anchorBtn.Parent
+            anchorBtn.Size    = UDim2.new(1, 0, 0, 0)
+            anchorBtn.Visible = false
         end
-        currentIndex  = math.clamp(currentIndex, 1, #servers)
-        local entry   = servers[currentIndex]
-        selectedJobId = entry.JobId
-        showServerDetails(entry)
-        statusLabel:SetText(currentIndex .. " / " .. #servers .. " server(s)")
-        hopLabel:SetText("Selected: " .. tostring(entry.ServerName))
+    end)
+
+    local scrollFrame = Instance.new("ScrollingFrame")
+    scrollFrame.Name                 = "SH_Scroll"
+    scrollFrame.Size                 = UDim2.new(1, 0, 0, SCROLL_H)
+    scrollFrame.BackgroundColor3     = Theme.MainBackground
+    scrollFrame.BorderSizePixel      = 0
+    scrollFrame.ScrollBarThickness   = 4
+    scrollFrame.ScrollBarImageColor3 = Theme.BorderColor
+    scrollFrame.CanvasSize           = UDim2.new(0, 0, 0, 0)
+    scrollFrame.AutomaticCanvasSize  = Enum.AutomaticSize.Y
+    scrollFrame.ClipsDescendants     = true
+    scrollFrame.LayoutOrder          = 0
+
+    pcall(function()
+        if contentFrame and typeof(contentFrame) == "Instance" then
+            scrollFrame.Parent = contentFrame
+        end
+    end)
+
+    local scrollStroke = Instance.new("UIStroke")
+    scrollStroke.Thickness = 1
+    scrollStroke.Color     = Theme.BorderInactive
+    scrollStroke.Parent    = scrollFrame
+
+    local cardLayout = Instance.new("UIListLayout")
+    cardLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    cardLayout.Padding   = UDim.new(0, CARD_PAD)
+    cardLayout.Parent    = scrollFrame
+
+    local cardPad = Instance.new("UIPadding")
+    cardPad.PaddingLeft   = UDim.new(0, 3)
+    cardPad.PaddingRight  = UDim.new(0, 6)
+    cardPad.PaddingTop    = UDim.new(0, 3)
+    cardPad.PaddingBottom = UDim.new(0, 3)
+    cardPad.Parent        = scrollFrame
+
+    local emptyLabel = Instance.new("TextLabel")
+    emptyLabel.Name               = "SH_Empty"
+    emptyLabel.Size               = UDim2.new(1, 0, 0, 40)
+    emptyLabel.BackgroundTransparency = 1
+    emptyLabel.Text               = "No servers — click Refresh"
+    emptyLabel.TextColor3         = Theme.TextMuted
+    emptyLabel.Font               = Enum.Font.Garamond
+    emptyLabel.TextSize           = 14
+    emptyLabel.TextXAlignment     = Enum.TextXAlignment.Center
+    emptyLabel.TextYAlignment     = Enum.TextYAlignment.Center
+    emptyLabel.Parent             = scrollFrame
+
+    -- ── buildCards: reconstrói os cards no scroll ─────────────────────────────
+    local function buildCards(servers)
+        pcall(function()
+            -- Limpa cards antigos
+            for _, cf in ipairs(cardFrames) do
+                pcall(function() cf.frame:Destroy() end)
+            end
+            cardFrames = {}
+
+            if not servers or #servers == 0 then
+                emptyLabel.Visible = true
+                return
+            end
+            emptyLabel.Visible = false
+
+            for i, entry in ipairs(servers) do
+                local ok2 = pcall(function()
+                    local isSelected = selectedEntry
+                        and safeStr(selectedEntry.JobId) == safeStr(entry.JobId)
+
+                    -- Card frame
+                    local card = Instance.new("TextButton")
+                    card.Name               = "SH_Card_" .. i
+                    card.Size               = UDim2.new(1, 0, 0, CARD_H)
+                    card.BackgroundColor3   = isSelected and Theme.CardSelected or Theme.MainBackground
+                    card.BorderSizePixel    = 0
+                    card.Text               = ""
+                    card.AutoButtonColor    = false
+                    card.LayoutOrder        = i
+                    card.Parent             = scrollFrame
+
+                    local stroke = Instance.new("UIStroke")
+                    stroke.Thickness = 1
+                    stroke.Color     = isSelected and Theme.BorderColor or Theme.BorderInactive
+                    stroke.Parent    = card
+
+                    -- Linha resumida: [Nome]  Região  Players↑  Houses⌂
+                    local summary = string.format(
+                        "%-18s  %-6s  %d P  %d H  %s",
+                        safeStr(entry.ServerName):sub(1, 18),
+                        safeStr(entry.Region):sub(1, 6),
+                        safeNum(entry.Players, 0),
+                        safeNum(entry.Houses,  0),
+                        formatAge(entry.LastHeardFrom)
+                    )
+
+                    local lbl = Instance.new("TextLabel")
+                    lbl.Size               = UDim2.new(1, -8, 1, 0)
+                    lbl.Position           = UDim2.new(0, 6, 0, 0)
+                    lbl.BackgroundTransparency = 1
+                    lbl.Text               = summary
+                    lbl.TextColor3         = isSelected and Theme.TextActive or Theme.TextNormal
+                    lbl.Font               = Enum.Font.Code
+                    lbl.TextSize           = 12
+                    lbl.TextXAlignment     = Enum.TextXAlignment.Left
+                    lbl.TextYAlignment     = Enum.TextYAlignment.Center
+                    lbl.TextTruncate       = Enum.TextTruncate.AtEnd
+                    lbl.Parent             = card
+
+                    local cf = { frame = card, entry = entry, stroke = stroke, lbl = lbl }
+                    cardFrames[#cardFrames + 1] = cf
+
+                    -- Hover
+                    card.MouseEnter:Connect(function()
+                        pcall(function()
+                            if not (selectedEntry and safeStr(selectedEntry.JobId) == safeStr(entry.JobId)) then
+                                card.BackgroundColor3 = Theme.CardHover
+                                stroke.Color = Theme.BorderColor
+                            end
+                        end)
+                    end)
+                    card.MouseLeave:Connect(function()
+                        pcall(function()
+                            if not (selectedEntry and safeStr(selectedEntry.JobId) == safeStr(entry.JobId)) then
+                                card.BackgroundColor3 = Theme.MainBackground
+                                stroke.Color = Theme.BorderInactive
+                            end
+                        end)
+                    end)
+
+                    -- Clique: seleciona e destaca
+                    card.MouseButton1Click:Connect(function()
+                        pcall(function()
+                            -- Deseleciona o card anterior
+                            for _, prev in ipairs(cardFrames) do
+                                pcall(function()
+                                    prev.frame.BackgroundColor3 = Theme.MainBackground
+                                    prev.stroke.Color           = Theme.BorderInactive
+                                    prev.lbl.TextColor3         = Theme.TextNormal
+                                end)
+                            end
+                            -- Seleciona este
+                            card.BackgroundColor3 = Theme.CardSelected
+                            stroke.Color          = Theme.BorderColor
+                            lbl.TextColor3        = Theme.TextActive
+                            -- Atualiza painel de detalhes
+                            showDetails(entry)
+                        end)
+                    end)
+                end)
+                if not ok2 then
+                    -- ignora card com erro e continua
+                end
+            end
+        end)
     end
 
-    detailGroup:AddButton("◀  Previous", function()
-        currentIndex = currentIndex - 1
-        if currentIndex < 1 then currentIndex = math.max(1, #getServersNow()) end
-        updateNavigator()
+    -- ── Botão Refresh ─────────────────────────────────────────────────────────
+    ctrlGroup:AddButton("Refresh List", function()
+        pcall(function()
+            parseServers()
+            local regions = getRegions()
+            pcall(function() regionDrop:SetValues(regions) end)
+            local servers = filteredAndSorted()
+            buildCards(servers)
+            local n = #servers
+            if n == 0 then
+                statusLabel:SetText("No servers found in ServerInfo")
+                jobLabel:SetText("")
+            elseif not selectedEntry then
+                statusLabel:SetText(n .. " server(s) — click one to select")
+                jobLabel:SetText("")
+            end
+        end)
     end)
 
-    detailGroup:AddButton("Next  ▶", function()
-        local servers = getServersNow()
-        currentIndex = currentIndex + 1
-        if currentIndex > #servers then currentIndex = 1 end
-        updateNavigator()
+    -- ── Botão Hop ─────────────────────────────────────────────────────────────
+    ctrlGroup:AddButton("Hop to Selected Server", function()
+        pcall(function()
+            if not selectedEntry then
+                statusLabel:SetText("Select a server first!")
+                return
+            end
+            local jobId = safeStr(selectedEntry.JobId, "")
+            if jobId == "" or jobId == "?" then
+                statusLabel:SetText("Invalid JobId — can't hop")
+                return
+            end
+            statusLabel:SetText("Hopping to " .. safeStr(selectedEntry.ServerName) .. "...")
+            -- game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, jobId, Players.LocalPlayer)
+        end)
     end)
 
-    -- Auto-refresh a cada 30s quando ServerInfo existir
+    -- ── Auto-refresh a cada 30s ───────────────────────────────────────────────
     if connMgr then
-        local lastRefresh = 0
+        local lastAutoRefresh = 0
         connMgr:add(RunService.Heartbeat:Connect(function()
-            local now = os.clock()
-            if now - lastRefresh < 30 then return end
-            lastRefresh = now
-            local ok2 = pcall(function()
+            local ok3, now = pcall(os.clock)
+            if not ok3 then return end
+            if now - lastAutoRefresh < 30 then return end
+            lastAutoRefresh = now
+            pcall(function()
                 local si = ReplicatedStorage:FindFirstChild("ServerInfo")
                 if not si then return end
                 parseServers()
                 local regions = getRegions()
                 pcall(function() regionDrop:SetValues(regions) end)
-                updateNavigator()
+                local servers = filteredAndSorted()
+                buildCards(servers)
             end)
-            if not ok2 then end
         end), "serverHop.AutoRefresh")
     end
 end
