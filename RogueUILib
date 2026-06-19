@@ -257,26 +257,32 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
 
     phClose.MouseButton1Click:Connect(closePanel)
 
-    local GuiService = game:GetService("GuiService")
-
     if addCleanup then
         addCleanup(UserInputService.InputBegan:Connect(function(input)
             if not open then return end
             if input.UserInputType ~= Enum.UserInputType.MouseButton1
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
-            -- Checa imediatamente (sem task.defer) se o clique foi dentro do painel
-            -- Usa GetGuiObjectsAtPosition para detectar qualquer filho do painel
+
             local mp = UserInputService:GetMouseLocation()
-            local objects = GuiService:GetGuiObjectsAtPosition(mp.X, mp.Y)
-            for _, obj in ipairs(objects) do
-                local cur = obj
-                while cur do
-                    if cur == panel or (activeSubMenuFrame and cur == activeSubMenuFrame) then return end  -- clique foi dentro do painel ou do sub-menu ativo
-                    cur = cur.Parent
+
+            -- Check if click is inside the panel itself
+            local pp = panel.AbsolutePosition
+            local ps = panel.AbsoluteSize
+            if mp.X >= pp.X and mp.X <= pp.X + ps.X and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y then
+                return
+            end
+
+            -- Check if click is inside the active sub-menu (dropdown overlay or color picker)
+            if activeSubMenuFrame and activeSubMenuFrame.Visible then
+                local sp = activeSubMenuFrame.AbsolutePosition
+                local ss = activeSubMenuFrame.AbsoluteSize
+                if mp.X >= sp.X and mp.X <= sp.X + ss.X and mp.Y >= sp.Y and mp.Y <= sp.Y + ss.Y then
+                    return
                 end
             end
-            -- Verifica anchorFrame (gear btn)
+
+            -- Check if click is on the anchor (gear button)
             local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
             local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
             local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
@@ -368,7 +374,16 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         return api
     end
 
-    function panelAPI:AddToggle(labelText, default, cb)
+    function panelAPI:AddToggle(labelText, defaultOrOpts, cb)
+        local default = defaultOrOpts
+        if type(defaultOrOpts) == "table" and (defaultOrOpts.Default ~= nil or defaultOrOpts.Callback ~= nil) then
+            default = defaultOrOpts.Default
+            cb = defaultOrOpts.Callback
+            if defaultOrOpts.Text and (not labelText or labelText == "") then
+                labelText = defaultOrOpts.Text
+            end
+        end
+
         local row  = makeRow(22)
         makeRowLbl(row, labelText)
         local zone = makeWidgetZone(row)
@@ -423,7 +438,19 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         return api
     end
 
-    function panelAPI:AddSlider(labelText, min, max, default, rounding, cb)
+    function panelAPI:AddSlider(labelText, minOrOpts, max, default, rounding, cb)
+        local min = minOrOpts
+        if type(minOrOpts) == "table" and minOrOpts.Min ~= nil then
+            min      = minOrOpts.Min
+            max      = minOrOpts.Max
+            default  = minOrOpts.Default
+            rounding = minOrOpts.Rounding or 0
+            cb       = minOrOpts.Callback
+            if minOrOpts.Text and (not labelText or labelText == "") then
+                labelText = minOrOpts.Text
+            end
+        end
+
         rounding = rounding or 0
         local row = makeRow(30)
 
@@ -512,7 +539,16 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         return api
     end
 
-    function panelAPI:AddColorPicker(labelText, default, cb)
+    function panelAPI:AddColorPicker(labelText, defaultOrOpts, cb)
+        local default = defaultOrOpts
+        if type(defaultOrOpts) == "table" and (defaultOrOpts.Default ~= nil or defaultOrOpts.Callback ~= nil) then
+            default  = defaultOrOpts.Default
+            cb       = defaultOrOpts.Callback
+            if defaultOrOpts.Text and (not labelText or labelText == "") then
+                labelText = defaultOrOpts.Text
+            end
+        end
+
         default = default or Color3.fromRGB(255,255,255)
         local swatchRow = makeRow(22)
         makeRowLbl(swatchRow, labelText)
@@ -627,7 +663,21 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         return api
     end
 
-    function panelAPI:AddDropdown(labelText, values, multi, default, cb)
+    function panelAPI:AddDropdown(labelText, valuesOrOpts, multi, default, cb)
+        -- Support both calling styles:
+        -- 1) Positional:  AddDropdown("label", valuesArray, multi, default, cb)
+        -- 2) Table:       AddDropdown("label", { Values=..., Multi=..., Default=..., Callback=..., Text=... })
+        local values = valuesOrOpts
+        if type(valuesOrOpts) == "table" and valuesOrOpts.Values then
+            values  = valuesOrOpts.Values
+            multi   = valuesOrOpts.Multi or false
+            default = valuesOrOpts.Default
+            cb      = valuesOrOpts.Callback
+            if valuesOrOpts.Text and (not labelText or labelText == "") then
+                labelText = valuesOrOpts.Text
+            end
+        end
+
         local row = makeRow(38)
 
         local lbl = Instance.new("TextLabel")
@@ -640,6 +690,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
         lbl.TextXAlignment     = Enum.TextXAlignment.Left
         lbl.ZIndex             = PANEL_ZIDX+3
         lbl.Parent             = row
+
 
         local selected = {}
         if multi then
