@@ -264,7 +264,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
 
-            -- Defer so MouseButton1Click on sub-menu options fires first
+            print("[PANEL-DEBUG] InputBegan triggered for panel:", titleText)
             task.defer(function()
                 if not open then return end
 
@@ -273,24 +273,31 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 -- Check if click is inside the panel itself
                 local pp = panel.AbsolutePosition
                 local ps = panel.AbsoluteSize
-                if mp.X >= pp.X and mp.X <= pp.X + ps.X and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y then
-                    return
-                end
+                local inPanel = mp.X >= pp.X and mp.X <= pp.X + ps.X and mp.Y >= pp.Y and mp.Y <= pp.Y + ps.Y
 
                 -- Check if click is inside the active sub-menu (dropdown overlay or color picker)
+                local inSub = false
                 if activeSubMenuFrame and activeSubMenuFrame.Visible then
                     local sp = activeSubMenuFrame.AbsolutePosition
                     local ss = activeSubMenuFrame.AbsoluteSize
-                    if mp.X >= sp.X and mp.X <= sp.X + ss.X and mp.Y >= sp.Y and mp.Y <= sp.Y + ss.Y then
-                        return
-                    end
+                    inSub = mp.X >= sp.X and mp.X <= sp.X + ss.X and mp.Y >= sp.Y and mp.Y <= sp.Y + ss.Y
                 end
 
                 -- Check if click is on the anchor (gear button)
                 local ap = anchorFrame and anchorFrame.AbsolutePosition or Vector2.new(-9999,-9999)
                 local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
                 local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
-                if not inAnchor then closePanel() end
+
+                print(string.format("[PANEL-DEBUG] panel=%s, mp=%s, inPanel=%s, inSub=%s, inAnchor=%s",
+                    tostring(titleText), tostring(mp), tostring(inPanel), tostring(inSub), tostring(inAnchor)))
+
+                if inPanel or inSub or inAnchor then
+                    print("[PANEL-DEBUG] Keeping panel open")
+                    return
+                end
+
+                print("[PANEL-DEBUG] Closing panel since click outside")
+                closePanel()
             end)
         end))
         addCleanup(function() closePanel() end)
@@ -811,10 +818,25 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 opt.TextSize         = 13
                 opt.TextTruncate     = Enum.TextTruncate.AtEnd
                 opt.ZIndex           = PANEL_ZIDX+12
+                opt.Active           = true
+                opt.Selectable       = true
                 opt.Parent           = mScroll
-                opt.MouseEnter:Connect(function() opt.TextColor3=theme.TextActive; playHover() end)
+                opt.MouseEnter:Connect(function()
+                    print("[DD-DEBUG] MouseEnter on option:", optVal, "label:", labelText)
+                    opt.TextColor3=theme.TextActive; playHover()
+                end)
                 opt.MouseLeave:Connect(function()
+                    print("[DD-DEBUG] MouseLeave on option:", optVal, "label:", labelText)
                     if not selected[optVal] then opt.TextColor3=theme.TextNormal end
+                end)
+                opt.MouseButton1Down:Connect(function()
+                    print("[DD-DEBUG] MouseButton1Down on option:", optVal, "label:", labelText)
+                end)
+                opt.MouseButton1Up:Connect(function()
+                    print("[DD-DEBUG] MouseButton1Up on option:", optVal, "label:", labelText)
+                end)
+                opt.Activated:Connect(function()
+                    print("[DD-DEBUG] Activated on option:", optVal, "label:", labelText)
                 end)
                 opt.MouseButton1Click:Connect(function()
                     print("[DD-DEBUG] Click! label:", labelText, "opt:", optVal, "multi:", multi)
@@ -857,6 +879,7 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 if input.UserInputType~=Enum.UserInputType.MouseButton1
                 and input.UserInputType~=Enum.UserInputType.Touch then return end
                 
+                print("[DD-DEBUG] InputBegan triggered for:", labelText)
                 -- Defer so MouseButton1Click on options fires first
                 task.defer(function()
                     if not dropOpen then return end
@@ -865,7 +888,14 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                     local bp2=btn.AbsolutePosition;       local bs2=btn.AbsoluteSize
                     local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                     local inB=mp.X>=bp2.X and mp.X<=bp2.X+bs2.X and mp.Y>=bp2.Y and mp.Y<=bp2.Y+bs2.Y
-                    if not inM and not inB then closeMenu() end
+                    print(string.format("[DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s",
+                        tostring(labelText), tostring(mp), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB)))
+                    if not inM and not inB then
+                        print("[DD-DEBUG] Closing menu for:", labelText)
+                        closeMenu()
+                    else
+                        print("[DD-DEBUG] Keeping menu open for:", labelText)
+                    end
                 end)
             end))
             addCleanup(function()
@@ -1806,6 +1836,7 @@ function RogueUI:CreateWindow(options)
                     if input.UserInputType~=Enum.UserInputType.MouseButton1
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
                     local gen = openGen
+                    print("[MAIN-DD-DEBUG] InputBegan triggered for main dropdown:", text or "Unknown")
                     task.defer(function()
                         if not open or openGen ~= gen then return end
                         local mp=UserInputService:GetMouseLocation()
@@ -1813,7 +1844,14 @@ function RogueUI:CreateWindow(options)
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                         local inB=mp.X>=bp.X  and mp.X<=bp.X+bs.X  and mp.Y>=bp.Y  and mp.Y<=bp.Y+bs.Y
-                        if not inM and not inB then closeMenu() end
+                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s",
+                            tostring(text), tostring(mp), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB)))
+                        if not inM and not inB then
+                            print("[MAIN-DD-DEBUG] Closing main dropdown:", text)
+                            closeMenu()
+                        else
+                            print("[MAIN-DD-DEBUG] Keeping main dropdown open:", text)
+                        end
                     end)
                 end))
                 addCleanup(closeMenu)
@@ -1848,12 +1886,28 @@ function RogueUI:CreateWindow(options)
                         opt.TextSize         = 15
                         opt.TextTruncate     = Enum.TextTruncate.AtEnd
                         opt.ZIndex           = 101
+                        opt.Active           = true
+                        opt.Selectable       = true
                         opt.Parent           = mScroll
-                        opt.MouseEnter:Connect(function() opt.TextColor3=RogueUI.Theme.TextActive; playHover() end)
+                        opt.MouseEnter:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseEnter on option:", optVal, "label:", text)
+                            opt.TextColor3=RogueUI.Theme.TextActive; playHover()
+                        end)
                         opt.MouseLeave:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseLeave on option:", optVal, "label:", text)
                             if not selected[optVal] then opt.TextColor3=RogueUI.Theme.TextNormal end
                         end)
+                        opt.MouseButton1Down:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseButton1Down on option:", optVal, "label:", text)
+                        end)
+                        opt.MouseButton1Up:Connect(function()
+                            print("[MAIN-DD-DEBUG] MouseButton1Up on option:", optVal, "label:", text)
+                        end)
+                        opt.Activated:Connect(function()
+                            print("[MAIN-DD-DEBUG] Activated on option:", optVal, "label:", text)
+                        end)
                         opt.MouseButton1Click:Connect(function()
+                            print("[MAIN-DD-DEBUG] Click! label:", text, "opt:", optVal, "multi:", isMulti)
                             if isMulti then
                                 selected[optVal]=not selected[optVal]
                                 opt.TextColor3=selected[optVal] and RogueUI.Theme.TextActive or RogueUI.Theme.TextNormal
