@@ -1381,15 +1381,15 @@ function RogueUI:CreateWindow(options)
                 local text       = opts.Text     or id
                 local default    = opts.Default  or false
                 local cb         = opts.Callback or function() end
-                local hasKeybind = opts.Keybind  or false
+                local hasKeybind = true           -- sempre visível; o usuário define a tecla pelo ConfigPanel
                 local defKey     = opts.KeybindKey
 
                 local toggleData = {
                     Value              = default,
                     OnChangedCallbacks = { cb },
-                    KeybindEnabled     = hasKeybind and (defKey~=nil),
+                    KeybindEnabled     = defKey ~= nil,
                     KeybindKey         = defKey or nil,
-                    KeybindMode        = "Toggle",
+                    KeybindMode        = opts.KeybindMode or "Toggle",
                     _configPanel       = nil,
                 }
                 RogueUI.Toggles[id] = toggleData
