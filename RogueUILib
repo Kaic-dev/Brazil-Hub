@@ -1044,6 +1044,7 @@ function RogueUI:CreateWindow(options)
     screenGui.Name           = "RogueHubGui"
     screenGui.ResetOnSpawn   = false
     screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    screenGui.IgnoreGuiInset = true
     screenGui.Parent         = UIParent
     self_Window.Gui          = screenGui
 
@@ -1805,11 +1806,9 @@ function RogueUI:CreateWindow(options)
                     if input.UserInputType~=Enum.UserInputType.MouseButton1
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
                     local gen = openGen
-                    local rawPos = input.Position
                     task.defer(function()
                         if not open or openGen ~= gen then return end
-                        local gi=game:GetService("GuiService"):GetGuiInset()
-                        local mp=Vector2.new(rawPos.X, rawPos.Y + gi.Y)
+                        local mp=UserInputService:GetMouseLocation()
                         local mp2=menu.AbsolutePosition; local ms=menu.AbsoluteSize
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
