@@ -713,6 +713,13 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             end
         end
 
+        local function posMenu()
+            local ap=btn.AbsolutePosition; local as=btn.AbsoluteSize
+            menuFrame.Position = UDim2.new(0,ap.X,0,ap.Y+as.Y+1)
+            menuFrame.Size     = UDim2.new(0,as.X,0,math.min(#values*20,140))
+            mScroll.CanvasSize = UDim2.new(0,0,0,#values*20)
+        end
+
         local function closeMenu()
             if not dropOpen then return end
             dropOpen = false; menuFrame.Visible=false
@@ -731,13 +738,6 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             posMenu(); menuFrame.Visible=true
             bStroke.Color=theme.BorderColor
             dropPosConn=RunService.Heartbeat:Connect(posMenu)
-        end
-
-        local function posMenu()
-            local ap=btn.AbsolutePosition; local as=btn.AbsoluteSize
-            menuFrame.Position = UDim2.new(0,ap.X,0,ap.Y+as.Y+1)
-            menuFrame.Size     = UDim2.new(0,as.X,0,math.min(#values*20,140))
-            mScroll.CanvasSize = UDim2.new(0,0,0,#values*20)
         end
 
         local function populateMenu()
