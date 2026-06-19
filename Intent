@@ -346,5 +346,71 @@ return {
     isEnabled = Intent.isEnabled,
     refreshAll = Intent.refreshAll,
     connectionMgr = connectionMgr,
-    connectionMgrs = connectionMgrs
+    connectionMgrs = connectionMgrs,
+    
+    -- OOP interface for StateManager integration
+    new = function(stateManager)
+        local IntentModule = {
+            stateManager = stateManager,
+            moduleName = "Intent",
+            enabled = false,
+            connectionMgr = connectionMgr,
+            connectionMgrs = connectionMgrs,
+        }
+        
+        IntentModule.__index = IntentModule
+        
+        function IntentModule:enable()
+            if self.enabled then return end
+            self.enabled = true
+            Intent.enabled = true
+            
+            -- Sincronizar com StateManager
+            if self.stateManager then
+                self.stateManager:enableModule(self.moduleName)
+            end
+            
+            createAllBillboards()
+            setupPlayerEventConnections()
+            for _, billboard in pairs(billboardRegistry) do
+                local label = billboard:FindFirstChild("Tool")
+                if label then
+                    label.TextTransparency = 0
+                end
+            end
+        end
+        
+        function IntentModule:disable()
+            if not self.enabled then return end
+            self.enabled = false
+            Intent.enabled = false
+            
+            -- Sincronizar com StateManager
+            if self.stateManager then
+                self.stateManager:disableModule(self.moduleName)
+            end
+            
+            for _, billboard in pairs(billboardRegistry) do
+                local label = billboard:FindFirstChild("Tool")
+                if label then
+                    label.TextTransparency = 1
+                end
+            end
+            removeAllBillboards()
+            disconnectAllConnections()
+        end
+        
+        function IntentModule:isEnabled()
+            return self.enabled
+        end
+        
+        function IntentModule:refreshAll()
+            if not self.enabled then return end
+            for player, _ in pairs(billboardRegistry) do
+                updateBillboardLabel(player)
+            end
+        end
+        
+        return setmetatable(IntentModule, IntentModule)
+    end
 }
