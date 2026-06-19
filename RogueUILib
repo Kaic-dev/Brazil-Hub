@@ -264,11 +264,13 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
             and input.UserInputType ~= Enum.UserInputType.Touch then return end
             if sliderDragging then return end
 
-            print("[PANEL-DEBUG] InputBegan triggered for panel:", titleText)
+            local rawPos = input.Position
+            print("[PANEL-DEBUG] InputBegan triggered for panel:", titleText, "rawPos:", rawPos)
             task.defer(function()
                 if not open then return end
 
-                local mp = UserInputService:GetMouseLocation()
+                local mp = Vector2.new(rawPos.X, rawPos.Y)
+                local mLoc = UserInputService:GetMouseLocation()
 
                 -- Check if click is inside the panel itself
                 local pp = panel.AbsolutePosition
@@ -288,8 +290,8 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 local as = anchorFrame and anchorFrame.AbsoluteSize     or Vector2.new(0,0)
                 local inAnchor = mp.X>=ap.X and mp.X<=ap.X+as.X and mp.Y>=ap.Y and mp.Y<=ap.Y+as.Y
 
-                print(string.format("[PANEL-DEBUG] panel=%s, mp=%s, inPanel=%s, inSub=%s, inAnchor=%s",
-                    tostring(titleText), tostring(mp), tostring(inPanel), tostring(inSub), tostring(inAnchor)))
+                print(string.format("[PANEL-DEBUG] panel=%s, mp=%s, mLoc=%s, inPanel=%s, inSub=%s, inAnchor=%s, panelPos=%s, panelSize=%s",
+                    tostring(titleText), tostring(mp), tostring(mLoc), tostring(inPanel), tostring(inSub), tostring(inAnchor), tostring(pp), tostring(ps)))
 
                 if inPanel or inSub or inAnchor then
                     print("[PANEL-DEBUG] Keeping panel open")
@@ -879,17 +881,19 @@ local function createRichConfigPanel(screenGui, anchorFrame, titleText, theme, a
                 if input.UserInputType~=Enum.UserInputType.MouseButton1
                 and input.UserInputType~=Enum.UserInputType.Touch then return end
                 
-                print("[DD-DEBUG] InputBegan triggered for:", labelText)
+                local rawPos = input.Position
+                print("[DD-DEBUG] InputBegan triggered for:", labelText, "rawPos:", rawPos)
                 -- Defer so MouseButton1Click on options fires first
                 task.defer(function()
                     if not dropOpen then return end
-                    local mp=UserInputService:GetMouseLocation()
+                    local mp=Vector2.new(rawPos.X, rawPos.Y)
+                    local mLoc=UserInputService:GetMouseLocation()
                     local mp2=menuFrame.AbsolutePosition; local ms=menuFrame.AbsoluteSize
                     local bp2=btn.AbsolutePosition;       local bs2=btn.AbsoluteSize
                     local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                     local inB=mp.X>=bp2.X and mp.X<=bp2.X+bs2.X and mp.Y>=bp2.Y and mp.Y<=bp2.Y+bs2.Y
-                    print(string.format("[DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
-                        tostring(labelText), tostring(mp), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB),
+                    print(string.format("[DD-DEBUG] label: %s, mp: %s, mLoc: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                        tostring(labelText), tostring(mp), tostring(mLoc), tostring(mp2), tostring(ms), tostring(bp2), tostring(bs2), tostring(inM), tostring(inB),
                         tostring(menuFrame.Parent and menuFrame.Parent.Name), tostring(menuFrame.Parent and menuFrame.Parent.ClassName), tostring(menuFrame.Position)))
                     if not inM and not inB then
                         print("[DD-DEBUG] Closing menu for:", labelText)
@@ -1069,6 +1073,11 @@ function RogueUI:CreateWindow(options)
             table.insert(self_Window.CleanupConnections, conn)
         end
         return conn
+    end
+
+    local oldGui = UIParent:FindFirstChild("RogueHubGui")
+    if oldGui then
+        pcall(function() oldGui:Destroy() end)
     end
 
     local screenGui = Instance.new("ScreenGui")
@@ -1837,16 +1846,18 @@ function RogueUI:CreateWindow(options)
                     if input.UserInputType~=Enum.UserInputType.MouseButton1
                     and input.UserInputType~=Enum.UserInputType.Touch then return end
                     local gen = openGen
-                    print("[MAIN-DD-DEBUG] InputBegan triggered for main dropdown:", text or "Unknown")
+                    local rawPos = input.Position
+                    print("[MAIN-DD-DEBUG] InputBegan triggered for main dropdown:", text or "Unknown", "rawPos:", rawPos)
                     task.defer(function()
                         if not open or openGen ~= gen then return end
-                        local mp=UserInputService:GetMouseLocation()
+                        local mp=Vector2.new(rawPos.X, rawPos.Y)
+                        local mLoc=UserInputService:GetMouseLocation()
                         local mp2=menu.AbsolutePosition; local ms=menu.AbsoluteSize
                         local bp=btn.AbsolutePosition;   local bs=btn.AbsoluteSize
                         local inM=mp.X>=mp2.X and mp.X<=mp2.X+ms.X and mp.Y>=mp2.Y and mp.Y<=mp2.Y+ms.Y
                         local inB=mp.X>=bp.X  and mp.X<=bp.X+bs.X  and mp.Y>=bp.Y  and mp.Y<=bp.Y+bs.Y
-                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
-                            tostring(text), tostring(mp), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB),
+                        print(string.format("[MAIN-DD-DEBUG] label: %s, mp: %s, mLoc: %s, menuPos: %s, menuSize: %s, btnPos: %s, btnSize: %s, inM: %s, inB: %s, menuParent: %s (%s), menuPosProp: %s",
+                            tostring(text), tostring(mp), tostring(mLoc), tostring(mp2), tostring(ms), tostring(bp), tostring(bs), tostring(inM), tostring(inB),
                             tostring(menu.Parent and menu.Parent.Name), tostring(menu.Parent and menu.Parent.ClassName), tostring(menu.Position)))
                         if not inM and not inB then
                             print("[MAIN-DD-DEBUG] Closing main dropdown:", text)
