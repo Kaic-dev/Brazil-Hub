@@ -1,4 +1,4 @@
--- BetterLeaderboard.lua (Bug-fixed + Optimized)
+-- BetterLeaderboard.lua (Bug-fixed + Optimized + Observers)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -76,7 +76,6 @@ local PlayerDataModule = safeRequireRemote(
     "PlayerData"
 )
 
-
 local ConnectionManager = safeRequireRemote(
     "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/ConnectionManager",
     "ConnectionManager"
@@ -101,6 +100,14 @@ local ConnectionManager = safeRequireRemote(
     end,
 }
 
+-- Observers: centraliza TODAS as conexões por objeto/propriedade/sinal,
+-- compartilhando uma única RBXScriptConnection real entre múltiplos
+-- callbacks. Substitui o controle manual de _playerConns.
+local ObserversModule = safeRequireRemote(
+    "https://raw.githubusercontent.com/Kaic-dev/Brazil-Hub/main/Utils/Observers",
+    "Observers"
+)
+
 -- ─── BetterLeaderboard ────────────────────────────────────────────────────────
 
 local BetterLeaderboard = {}
@@ -116,14 +123,18 @@ function BetterLeaderboard.new(stateManager)
     self.leaderboard          = nil
     self.scrollingFrame       = nil
     self._connMgr             = ConnectionManager.new()
+    -- Observers cuida de TODAS as conexões por-player e dos sinais da UI
+    -- original do leaderboard. _connMgr fica só com Players.PlayerAdded/
+    -- PlayerRemoving e o Heartbeat de verificação (sinais globais únicos,
+    -- sem necessidade de dedupe).
+    self._observers            = ObserversModule and ObserversModule.new() or nil
     self._currentCameraTarget = nil
     self._playerCount         = 0  -- contador local evita Players:GetPlayers() toda atualização
 
-    -- FIX: tabelas separadas por responsabilidade — sem double tracking
-    -- _playerFrames:    [player] → Frame (UI)
-    -- _playerConns:     [player] → { conn, ... } conexões POR PLAYER (não no connMgr global)
+    -- _playerFrames: [player] → Frame (UI)
+    -- Conexões por player agora vivem dentro do Observers e são limpas
+    -- com self._observers:removeAllFor(player).
     self._playerFrames = {}
-    self._playerConns  = {}  -- gerenciado manualmente; connMgr cuida apenas de conns globais
     -- Verification accumulator for periodic client-side verification
     self._verifyAccumulator = 0
     self._verifyInterval = CONFIG.VERIFY_INTERVAL
@@ -361,14 +372,23 @@ end
 
 -- ─── Câmera ───────────────────────────────────────────────────────────────────
 
-function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
-    local camera = workspace.CurrentCamera
+-- Aplica o subject correto (spectate ou retorno ao próprio personagem) na
+-- câmera ATUAL (workspace.CurrentCamera). Extraído de _toggleCameraToPlayer
+-- para poder ser reaplicado quando o Roblox troca a instância da câmera
+-- (ex.: respawn de câmera), sem precisar duplicar a lógica.
+function BetterLeaderboard:_applyCameraSubject(camera)
     if not camera then return end
 
-    if targetPlayer == Players.LocalPlayer then return end
-
-    if self._currentCameraTarget == targetPlayer then
-        self._currentCameraTarget = nil
+    if self._currentCameraTarget then
+        local subject = nil
+        if self._currentCameraTarget.Character then
+            subject = self._currentCameraTarget.Character:FindFirstChildOfClass("Humanoid")
+                   or self._currentCameraTarget.Character:FindFirstChild("HumanoidRootPart")
+        end
+        if subject then
+            camera.CameraSubject = subject
+        end
+    else
         local local_ = Players.LocalPlayer
         local returnTarget = nil
         if local_ and local_.Character then
@@ -379,6 +399,18 @@ function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
         else
             camera.CameraType = Enum.CameraType.Custom
         end
+    end
+end
+
+function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+
+    if targetPlayer == Players.LocalPlayer then return end
+
+    if self._currentCameraTarget == targetPlayer then
+        self._currentCameraTarget = nil
+        self:_applyCameraSubject(camera)
     else
         if not targetPlayer then return end
         local subject = nil
@@ -395,42 +427,53 @@ function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
     self:_updateAllLabelsColor()
 end
 
+-- Observa workspace.CurrentCamera: se o Roblox trocar a instância da câmera
+-- (ex.: respawn de câmera) enquanto estamos espectando alguém, reaplica o
+-- CameraSubject na nova câmera em vez de deixar o spectate "perdido".
+function BetterLeaderboard:_observeCurrentCamera()
+    if not self._observers then return end
+
+    self._observers:observeProperty(workspace, "CurrentCamera", function()
+        local camera = workspace.CurrentCamera
+        if camera then
+            self:_applyCameraSubject(camera)
+        end
+    end, workspace)
+end
+
 -- ─── Leaderboard original ─────────────────────────────────────────────────────
+-- Migrado para Observers: o objeto "owner" usado para agrupar/limpar é o
+-- próprio `playerGui`, então tudo aqui some de uma vez com
+-- self._observers:removeAllFor(playerGui) se necessário (hoje a limpeza
+-- ocorre via self._observers:destroy() em disable()).
 
 function BetterLeaderboard:_hideOriginalLeaderboard()
     local playerGui = self:_getPlayerGui()
     if not playerGui then return end
-
-    -- FIX: desconecta _lbConn anterior antes de recriar
-    if self._lbConn then
-        self._connMgr:remove(self._lbConn)
-        self._lbConn = nil
-    end
 
     local function disableLeaderboard()
         local orig = playerGui:FindFirstChild("LeaderboardGui")
         if not orig then return end
         orig.Enabled = false
 
-        if self._lbEnabledConn then
-            self._connMgr:remove(self._lbEnabledConn)
+        if self._observers then
+            self._observers:observeProperty(orig, "Enabled", function()
+                if self.enabled and orig.Enabled then
+                    orig.Enabled = false
+                end
+            end, playerGui)
         end
-        self._lbEnabledConn = orig:GetPropertyChangedSignal("Enabled"):Connect(function()
-            if self.enabled and orig.Enabled then
-                orig.Enabled = false
-            end
-        end)
-        self._connMgr:add(self._lbEnabledConn, "leaderboard.EnabledChanged")
     end
 
     disableLeaderboard()
 
-    self._lbConn = playerGui.ChildAdded:Connect(function(child)
-        if child.Name == "LeaderboardGui" then
-            disableLeaderboard()
-        end
-    end)
-    self._connMgr:add(self._lbConn, "playerGui.ChildAdded")
+    if self._observers then
+        self._observers:observeChildAdded(playerGui, function(child)
+            if child.Name == "LeaderboardGui" then
+                disableLeaderboard()
+            end
+        end, playerGui)
+    end
 end
 
 function BetterLeaderboard:_showOriginalLeaderboard()
@@ -493,8 +536,8 @@ function BetterLeaderboard:_createObservedIndicator(player, parent)
     return indicator
 end
 
--- FIX: _createPlayerLabel não registra mais no connMgr — retorna conns para
--- addPlayerFrame gerenciar centralizadamente em _playerConns
+-- Usa Observers para registrar todos os sinais da label; owner=player
+-- agrupa a limpeza junto com o resto das conexões desse player.
 function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     local label = Instance.new("TextButton")
     label.Name                  = "PlayerLabel"
@@ -515,36 +558,38 @@ function BetterLeaderboard:_createPlayerLabel(player, rogueName, parent)
     label.TextTruncate          = Enum.TextTruncate.AtEnd
     label.Parent                = parent
 
-    local conns = {}
+    if not self._observers then return label end
 
     -- Hover
-    conns[#conns+1] = label.MouseEnter:Connect(function()
+    self._observers:observeSignal(label, "MouseEnter", function()
         label.TextColor3 = CONFIG.COLORS.GRAY
         label.Text       = player.Name
-    end)
-    conns[#conns+1] = label.MouseLeave:Connect(function()
+    end, player)
+
+    self._observers:observeSignal(label, "MouseLeave", function()
         label.TextColor3 = self:_getPlayerLabelColor(player)
         local rd = label:GetAttribute("RogueDisplay")
         label.Text = (rd and rd ~= "") and rd or "Carregando..."
-    end)
+    end, player)
 
     -- Right-click: spectate
-    conns[#conns+1] = label.MouseButton2Click:Connect(function()
+    self._observers:observeSignal(label, "MouseButton2Click", function()
         self:_toggleCameraToPlayer(player)
-    end)
+    end, player)
 
     -- Atualiza cor em mudança de personagem
-    conns[#conns+1] = player.CharacterAdded:Connect(function()
+    self._observers:observeSignal(player, "CharacterAdded", function()
         self:_updateAllLabelsColor()
-    end)
-    conns[#conns+1] = player.CharacterRemoving:Connect(function()
-        self:_updateAllLabelsColor()
-    end)
+    end, player)
 
-    return label, conns
+    self._observers:observeSignal(player, "CharacterRemoving", function()
+        self:_updateAllLabelsColor()
+    end, player)
+
+    return label
 end
 
--- FIX: _startRogueNameLoading guarda thread em _playerConns para cancelamento externo
+-- _startRogueNameLoading usa _rogueLoadFlags por player para cancelamento externo
 function BetterLeaderboard:_startRogueNameLoading(player, playerLabel)
     if not (utils and utils.getPlayerRogueDisplay) then return end
 
@@ -617,89 +662,77 @@ function BetterLeaderboard:addPlayerFrame(player)
 
     self:_createPrestigeButton(prestige, frame)
     self:_createObservedIndicator(player, frame)
-    local playerLabel, labelConns = self:_createPlayerLabel(player, rogueName, frame)
+    local playerLabel = self:_createPlayerLabel(player, rogueName, frame)
 
-    -- FIX: conexões de backpack gerenciadas localmente, sem pcall silenciador
-    local extraConns = {}
-
-    local attrSignal = player:GetAttributeChangedSignal("MaxEdict")
-    extraConns[#extraConns+1] = attrSignal:Connect(function()
-        self:_updateAllLabelsColor()
-    end)
-
-    local function connectBackpack(bp)
-        local c1 = bp.ChildAdded:Connect(function()   self:_updateAllLabelsColor() end)
-        local c2 = bp.ChildRemoved:Connect(function() self:_updateAllLabelsColor() end)
-        extraConns[#extraConns+1] = c1
-        extraConns[#extraConns+1] = c2
-    end
-
-    local bp = player:FindFirstChild("Backpack")
-    if bp then
-        connectBackpack(bp)
-    else
-        -- Espera Backpack aparecer; desconecta a si mesmo após encontrar
-        local waitConn
-        waitConn = player.ChildAdded:Connect(function(child)
-            if child.Name == "Backpack" then
-                connectBackpack(child)
-                -- FIX: remove waitConn de extraConns e desconecta
-                waitConn:Disconnect()
-                for i, c in ipairs(extraConns) do
-                    if c == waitConn then
-                        table.remove(extraConns, i)
-                        break
-                    end
-                end
+    if self._observers then
+        -- Reactive updates using PlayerData when available
+        local function onPlayerDataChanged()
+            local ed = nil
+            local pr = nil
+            if self._playerData and self._playerData.getEdictData then
+                local edd = self._playerData:getEdictData(player)
+                ed = edd and (edd.edictDisplay or edd.edict) or ""
+            elseif utils and utils.getPlayerEdictData then
+                local edd = utils:getPlayerEdictData(player)
+                ed = edd and (edd.edictDisplay or edd.edict) or ""
             end
-        end)
-        extraConns[#extraConns+1] = waitConn
-    end
+            if self._playerData and self._playerData.getPrestigeData then
+                local pd = self._playerData:getPrestigeData(player)
+                pr = pd and pd.level or 0
+            elseif utils and utils.getPlayerPrestigeData then
+                local pd = utils:getPlayerPrestigeData(player)
+                pr = pd and pd.level or 0
+            end
+            pcall(function()
+                self:_updateStateMaps(player, ed or "", pr or 0)
+                self:_updateAllLabelsColor()
+            end)
+        end
 
-    -- Reactive updates using PlayerData when available
-    local function onPlayerDataChanged()
-        -- recalc edict and prestige and sync to StateManager / UI
-        local ed = nil
-        local pr = nil
-        if self._playerData and self._playerData.getEdictData then
-            local edd = self._playerData:getEdictData(player)
-            ed = edd and (edd.edictDisplay or edd.edict) or ""
-        elseif utils and utils.getPlayerEdictData then
-            local edd = utils:getPlayerEdictData(player)
-            ed = edd and (edd.edictDisplay or edd.edict) or ""
-        end
-        if self._playerData and self._playerData.getPrestigeData then
-            local pd = self._playerData:getPrestigeData(player)
-            pr = pd and pd.level or 0
-        elseif utils and utils.getPlayerPrestigeData then
-            local pd = utils:getPlayerPrestigeData(player)
-            pr = pd and pd.level or 0
-        end
-        pcall(function()
-            self:_updateStateMaps(player, ed or "", pr or 0)
+        -- Atributo MaxEdict (afeta cor de todas as labels)
+        self._observers:observeAttribute(player, "MaxEdict", function()
             self:_updateAllLabelsColor()
-        end)
-    end
+        end, player)
 
-    -- Listen to Edict attribute changes
-    local edAttrConn = player:GetAttributeChangedSignal("Edict"):Connect(onPlayerDataChanged)
-    extraConns[#extraConns+1] = edAttrConn
+        -- Atributo Edict (afeta dados do player)
+        self._observers:observeAttribute(player, "Edict", onPlayerDataChanged, player)
 
-    -- Listen to Prestige leaderstat changes if present
-    local ls = player:FindFirstChild("leaderstats")
-    if ls then
-        local prest = ls:FindFirstChild("Prestige")
-        if prest then
-            local prestConn = prest:GetPropertyChangedSignal("Value"):Connect(onPlayerDataChanged)
-            extraConns[#extraConns+1] = prestConn
+        -- Backpack: ChildAdded/ChildRemoved (espera aparecer se ainda não existir)
+        local function connectBackpack(bp)
+            self._observers:observeChildAdded(bp, function()
+                self:_updateAllLabelsColor()
+            end, player)
+            self._observers:observeChildRemoved(bp, function()
+                self:_updateAllLabelsColor()
+            end, player)
+        end
+
+        local bp = player:FindFirstChild("Backpack")
+        if bp then
+            connectBackpack(bp)
+        else
+            self._observers:observeChildOnce(player, "Backpack", connectBackpack, player)
+        end
+
+        -- leaderstats.Prestige: Value changed (espera leaderstats/Prestige aparecerem se necessário)
+        local function connectLeaderstats(ls)
+            local prest = ls:FindFirstChild("Prestige")
+            if prest then
+                self._observers:observeProperty(prest, "Value", onPlayerDataChanged, player)
+            else
+                self._observers:observeChildOnce(ls, "Prestige", function(prestChild)
+                    self._observers:observeProperty(prestChild, "Value", onPlayerDataChanged, player)
+                end, player)
+            end
+        end
+
+        local ls = player:FindFirstChild("leaderstats")
+        if ls then
+            connectLeaderstats(ls)
+        else
+            self._observers:observeChildOnce(player, "leaderstats", connectLeaderstats, player)
         end
     end
-
-    -- FIX: todas as conns do player em _playerConns — sem double tracking no connMgr
-    local allConns = {}
-    for _, c in ipairs(labelConns)  do allConns[#allConns+1] = c end
-    for _, c in ipairs(extraConns)  do allConns[#allConns+1] = c end
-    self._playerConns[player] = allConns
 
     if not rogueName then
         self:_startRogueNameLoading(player, playerLabel)
@@ -717,12 +750,23 @@ function BetterLeaderboard:enable()
     if not playerGui then return end
 
     self.enabled      = true
-    
+
+    -- Reinstancia Observers a cada enable() para garantir estado limpo
+    -- (espelha o comportamento de _connMgr, que é recriado implicitamente
+    -- ao reconectar tudo abaixo).
+    if ObserversModule then
+        self._observers = ObserversModule.new()
+    end
+
+    -- Reage a trocas de workspace.CurrentCamera (ex.: respawn de câmera)
+    -- reaplicando o spectate/retorno na nova instância.
+    self:_observeCurrentCamera()
+
     -- Sincronizar com StateManager
     if self.stateManager then
         self.stateManager:enableModule(self.moduleName)
     end
-    
+
     self._playerCount = 0
 
     self:_hideOriginalLeaderboard()
@@ -754,13 +798,9 @@ function BetterLeaderboard:enable()
                 self._rogueLoadFlags[p] = nil
             end
 
-            -- FIX: desconecta conns do player diretamente de _playerConns
-            local conns = self._playerConns[p]
-            if conns then
-                for _, c in ipairs(conns) do
-                    if c and c.Connected then c:Disconnect() end
-                end
-                self._playerConns[p] = nil
+            -- Limpa TODAS as conexões desse player de uma vez via Observers
+            if self._observers then
+                self._observers:removeAllFor(p)
             end
 
             local frame = self._playerFrames[p]
@@ -787,7 +827,7 @@ end
 function BetterLeaderboard:disable()
     if not self.enabled then return end
     self.enabled = false
-    
+
     -- Sincronizar com StateManager
     if self.stateManager then
         self.stateManager:disableModule(self.moduleName)
@@ -801,17 +841,16 @@ function BetterLeaderboard:disable()
         self._rogueLoadFlags = {}
     end
 
-    -- FIX: desconecta conns de players manualmente (não estão no connMgr)
-    for _, conns in pairs(self._playerConns) do
-        for _, c in ipairs(conns) do
-            if c and c.Connected then c:Disconnect() end
-        end
+    -- Desliga TODAS as conexões registradas no Observers (player frames,
+    -- labels, atributos, backpack, leaderstats e leaderboard original)
+    if self._observers then
+        self._observers:destroy()
     end
-    self._playerConns  = {}
+
     self._playerFrames = {}
     self._playerCount  = 0
 
-    -- Desconecta conns globais (PlayerAdded, PlayerRemoving, lb guards)
+    -- Desconecta conns globais (PlayerAdded, PlayerRemoving, Heartbeat)
     self._connMgr:disconnectAll()
 
     if self.screenGui and self.screenGui.Parent then
@@ -820,8 +859,6 @@ function BetterLeaderboard:disable()
     self.screenGui        = nil
     self.leaderboard      = nil
     self.scrollingFrame   = nil
-    self._lbConn          = nil
-    self._lbEnabledConn   = nil
 
     self:_showOriginalLeaderboard()
 end
