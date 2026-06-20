@@ -12,8 +12,28 @@
 local Observers = {}
 Observers.__index = Observers
 
+-- IMPORTANTE: tostring(instance) no Roblox retorna o .Name da Instance,
+-- não um identificador único — duas Instances com o mesmo nome (ex.: duas
+-- "PlayerLabel" de players diferentes) geram a MESMA string. Se usássemos
+-- tostring(object) aqui, a segunda label "herdaria" a conexão da primeira
+-- e todo mundo reagiria ao mesmo evento (ex.: hover em um player afeta
+-- todos). Por isso usamos um id numérico ÚNICO por objeto, atribuído na
+-- primeira vez que o objeto é visto, via tabela fraca (não impede GC).
+local objectIds = setmetatable({}, { __mode = "k" })
+local nextObjectId = 0
+
+local function idFor(object)
+    local id = objectIds[object]
+    if not id then
+        nextObjectId = nextObjectId + 1
+        id = nextObjectId
+        objectIds[object] = id
+    end
+    return id
+end
+
 local function makeKey(kind, object, prop)
-    return kind .. "::" .. tostring(object) .. "::" .. tostring(prop or "")
+    return kind .. "::" .. idFor(object) .. "::" .. tostring(prop or "")
 end
 
 function Observers.new()
