@@ -129,6 +129,10 @@ function BetterLeaderboard.new(stateManager)
     -- sem necessidade de dedupe).
     self._observers            = ObserversModule and ObserversModule.new() or nil
     self._currentCameraTarget = nil
+    -- Guard por-player: evita registrar múltiplos listeners de CharacterAdded
+    -- quando o usuário clica repetidamente em alguém cujo character ainda
+    -- não carregou (ex.: logo após dar spectate ainda no menu/lobby).
+    self._pendingCameraWaits   = {}
     self._playerCount         = 0  -- contador local evita Players:GetPlayers() toda atualização
 
     -- _playerFrames: [player] → Frame (UI)
@@ -403,24 +407,59 @@ function BetterLeaderboard:_applyCameraSubject(camera)
 end
 
 function BetterLeaderboard:_toggleCameraToPlayer(targetPlayer)
-    local camera = workspace.CurrentCamera
-    if not camera then return end
+    if not workspace.CurrentCamera then return end
 
     if targetPlayer == Players.LocalPlayer then return end
 
     if self._currentCameraTarget == targetPlayer then
         self._currentCameraTarget = nil
-        self:_applyCameraSubject(camera)
+        -- Relê workspace.CurrentCamera aqui (em vez de reusar uma variável
+        -- capturada no início da função): se o Roblox tiver trocado a
+        -- instância da câmera entre o clique e agora (comum perto do
+        -- menu/spawn), aplicar na câmera antiga deixa a câmera VISÍVEL
+        -- parada, enquanto o subject fica preso numa câmera fantasma.
+        self:_applyCameraSubject(workspace.CurrentCamera)
     else
         if not targetPlayer then return end
+
+        -- Marca o alvo IMEDIATAMENTE, mesmo que o Character/Humanoid ainda
+        -- não exista (ex.: ainda no menu / acabou de spawnar). Antes, se
+        -- `subject` desse nil aqui, o clique era ignorado em silêncio e o
+        -- usuário precisava clicar de novo depois que o character carregasse.
+        self._currentCameraTarget = targetPlayer
+
         local subject = nil
         if targetPlayer.Character then
             subject = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
                    or targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         end
+
         if subject then
-            camera.CameraSubject      = subject
-            self._currentCameraTarget = targetPlayer
+            -- Relê a câmera atual aqui também, pelo mesmo motivo acima.
+            local camera = workspace.CurrentCamera
+            if camera then
+                camera.CameraSubject = subject
+            end
+        elseif self._observers then
+            -- Character (ou Humanoid dele) ainda não está pronto: aplica o
+            -- subject assim que CharacterAdded disparar, sem exigir um
+            -- segundo clique do usuário. Guard por-player evita empilhar
+            -- um listener novo a cada clique repetido no mesmo alvo
+            -- enquanto o character dele ainda não carregou.
+            self._pendingCameraWaits = self._pendingCameraWaits or {}
+            if not self._pendingCameraWaits[targetPlayer] then
+                self._pendingCameraWaits[targetPlayer] = true
+                local waitId
+                waitId = self._observers:observeSignal(targetPlayer, "CharacterAdded", function()
+                    self._pendingCameraWaits[targetPlayer] = nil
+                    if self._observers and waitId then
+                        self._observers:remove(waitId)
+                    end
+                    if self._currentCameraTarget == targetPlayer then
+                        self:_applyCameraSubject(workspace.CurrentCamera)
+                    end
+                end, targetPlayer)
+            end
         end
     end
 
@@ -439,6 +478,35 @@ function BetterLeaderboard:_observeCurrentCamera()
             self:_applyCameraSubject(camera)
         end
     end, workspace)
+end
+
+-- Observa o CharacterAdded do PRÓPRIO LocalPlayer. Caso o jogador dê
+-- spectate em alguém ANTES do seu próprio character existir (ex.: ainda no
+-- menu/lobby), o Roblox reassume o CameraSubject para o humanoid recém-
+-- spawnado assim que o personagem local nasce, derrubando o spectate sem
+-- avisar este módulo — por isso reaplicamos o subject correto logo após.
+function BetterLeaderboard:_observeLocalCharacterSpawn()
+    if not self._observers then return end
+
+    local localPlayer = Players.LocalPlayer
+    if not localPlayer then return end
+
+    self._observers:observeSignal(localPlayer, "CharacterAdded", function()
+        -- O motor de câmera padrão do Roblox reassume o CameraSubject para
+        -- o humanoid recém-spawnado ao longo de vários frames durante a
+        -- sequência de respawn — um único reforço pode ser sobrescrito
+        -- logo depois. Por isso reaplicamos por alguns frames seguidos.
+        local target = self._currentCameraTarget
+        if not target then return end
+
+        task.spawn(function()
+            for _ = 1, 10 do
+                task.wait()
+                if self._currentCameraTarget ~= target then return end
+                self:_applyCameraSubject(workspace.CurrentCamera)
+            end
+        end)
+    end, localPlayer)
 end
 
 -- ─── Leaderboard original ─────────────────────────────────────────────────────
@@ -757,10 +825,16 @@ function BetterLeaderboard:enable()
     if ObserversModule then
         self._observers = ObserversModule.new()
     end
+    self._pendingCameraWaits = {}
 
     -- Reage a trocas de workspace.CurrentCamera (ex.: respawn de câmera)
     -- reaplicando o spectate/retorno na nova instância.
     self:_observeCurrentCamera()
+
+    -- Reage ao PRÓPRIO character spawnar: se demos spectate antes do nosso
+    -- character existir, o Roblox reassume CameraSubject pro nosso humanoid
+    -- ao spawnar; reaplicamos o spectate correto logo em seguida.
+    self:_observeLocalCharacterSpawn()
 
     -- Sincronizar com StateManager
     if self.stateManager then
@@ -801,6 +875,10 @@ function BetterLeaderboard:enable()
             -- Limpa TODAS as conexões desse player de uma vez via Observers
             if self._observers then
                 self._observers:removeAllFor(p)
+            end
+
+            if self._pendingCameraWaits then
+                self._pendingCameraWaits[p] = nil
             end
 
             local frame = self._playerFrames[p]
